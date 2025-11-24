@@ -7,3 +7,8 @@ __pycache__/
 
 # Database
 *.db
+
+betenv/
+*.so
+*.dll
+*.dylib
