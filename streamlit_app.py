@@ -15,6 +15,10 @@ import os
 from data_agent import DataAgent
 from dotenv import load_dotenv
 from typing import Optional
+import uuid
+import json
+from pathlib import Path
+from datetime import datetime
 
 # Existing query agent import (still used inside the pipeline)
 from query_agent import parse_user_query
@@ -77,6 +81,9 @@ if "db_initialized" not in st.session_state:
 # NEW: cache OddsAgent - This is still good.
 if "odds_agent" not in st.session_state:
     st.session_state.odds_agent = None
+
+if "session_id" not in st.session_state:
+    st.session_state.session_id = str(uuid.uuid4())
 
 
 # NEW: helper to map our sport_type -> Odds API sport key
@@ -226,6 +233,16 @@ with st.sidebar:
         disabled=True,
     )
 
+    st.subheader("💵 Bet Budget per Pick")
+    bet_budget = st.slider(
+        "Max amount to stake on a single recommendation ($)",
+        min_value=0,
+        max_value=100,
+        value=20,
+        step=5,
+    )
+    st.session_state.bet_budget = bet_budget
+
 
     if st.button("🔌 Initialize Agent"):
         with st.spinner(f"Initializing {sport_type.replace('_', ' ').title()} Agent..."):
@@ -268,6 +285,27 @@ with st.sidebar:
         st.metric("Odds Entries", odds_count)
     else:
         st.info("Database not yet initialized")
+
+    st.divider()
+    st.subheader("📁 Session & Export")
+
+    session_id = st.session_state.get("session_id", "unknown_session")
+    log_dir = Path("session_logs")
+    log_path = log_dir / f"session_{session_id}.json"
+
+    if log_path.exists():
+        with open(log_path, "r") as f:
+            session_json_bytes = f.read().encode("utf-8")
+
+        st.text(f"Session ID: {session_id[:8]}...")
+        st.download_button(
+            label="⬇️ Download Session JSON",
+            data=session_json_bytes,
+            file_name=f"betting_edge_session_{session_id}.json",
+            mime="application/json",
+        )
+    else:
+        st.info("No deep analysis runs logged yet for this session.")
 
     st.divider()
 
@@ -349,6 +387,27 @@ else:
             "The system will parse your request, fetch data, run prediction, verification, behavior selection, recommendation, and ethics checks."
         )
 
+            # 🔹 NEW: User behavior controls
+        st.subheader("Your Betting Profile")
+
+        col_profile_1, col_profile_2 = st.columns(2)
+        with col_profile_1:
+            risk_tolerance = st.select_slider(
+                "Risk tolerance",
+                options=["Low", "Medium", "High"],
+                value=st.session_state.get("user_risk_tolerance", "Medium"),
+            )
+            st.session_state.user_risk_tolerance = risk_tolerance
+
+        with col_profile_2:
+            st.markdown(
+                """
+                - **Low** – Prefer safer recommendations.
+                - **Medium** – Balanced between safety and value.
+                - **High** – Comfortable with aggressive, high-edge bets.
+                """
+            )
+
         col_ex1, col_ex2 = st.columns(2)
         with col_ex1:
             st.info("Try: 'Fetch Premier League matches for Liverpool this season'")
@@ -397,11 +456,55 @@ else:
                         selected_match_for_analysis = match_options[selected_match_key]
 
                         if st.button("▶️ Run Deep Analysis for Selected Match", key="run_deep_analysis_button"):
-                            # Pass the initialized data_agent to the pipeline
+                            # Build user context for behavior agent
+                            user_context = {
+                                "risk_tolerance": st.session_state.get("user_risk_tolerance", "Medium"),
+                                "user_id": "default_user",
+                            }
+
                             pipeline = BettingEdgePipeline()
                             with st.spinner("Running prediction, verification, behavior, recommendation, and ethics agents..."):
-                                deep_analysis_results = pipeline.run_deep_analysis(selected_match_for_analysis)
+                                deep_analysis_results = pipeline.run_deep_analysis(
+                                    selected_match_for_analysis,
+                                    user_context=user_context,
+                                )
                                 st.session_state.deep_analysis_results = deep_analysis_results
+
+                                # 🔹 NEW: persist this analysis to a per-session JSON log
+                                try:
+                                    session_id = st.session_state.get("session_id", "unknown_session")
+                                    log_dir = Path("session_logs")
+                                    log_dir.mkdir(exist_ok=True)
+
+                                    log_path = log_dir / f"session_{session_id}.json"
+
+                                    # Load existing log (if any)
+                                    existing_entries = []
+                                    if log_path.exists():
+                                        try:
+                                            with open(log_path, "r") as f:
+                                                existing_entries = json.load(f)
+                                            if not isinstance(existing_entries, list):
+                                                existing_entries = [existing_entries]
+                                        except Exception:
+                                            existing_entries = []
+
+                                    # Build new entry
+                                    new_entry = {
+                                        "timestamp": datetime.utcnow().isoformat(),
+                                        "user_context": user_context,
+                                        "behavior_user_profile": deep_analysis_results.get("behavior_user_profile"),
+                                        "behavior_bucket": deep_analysis_results.get("behavior_bucket"),
+                                        "analysis": deep_analysis_results,
+                                    }
+
+                                    existing_entries.append(new_entry)
+
+                                    with open(log_path, "w") as f:
+                                        json.dump(existing_entries, f, indent=2, default=str)
+                                except Exception as e:
+                                    st.warning(f"Warning: Failed to write session log: {e}")
+
                             st.experimental_rerun()
 
                 else:
@@ -463,11 +566,68 @@ else:
 
                     st.subheader("Behavior Action & Ethics")
                     action_output = deep_analysis_result.get('action', {})
+
                     if isinstance(action_output, str):
-                        behavior_action_display = action_output
+                        action_tag = action_output
+                        bucket_name = action_output
+                        bucket_description = ""
+                        risk_factor_display = "N/A"
+                        user_profile_display = None
                     else:
-                        behavior_action_display = action_output.get('action', 'neutral_not_found')
-                    st.markdown(f"**Behavior Action:** {behavior_action_display}")
+                        action_tag = action_output.get("action", "SAFE_PICK")
+                        bucket_name = action_output.get("bucket_label") or action_tag
+                        bucket_description = action_output.get("bucket_description", "")
+                        risk_factor = action_output.get("risk_factor", None)
+                        risk_factor_display = (
+                            f"{risk_factor:.2f}"
+                            if isinstance(risk_factor, (int, float))
+                            else "N/A"
+                        )
+                        user_profile_display = action_output.get("user_profile")
+
+                    st.markdown(f"**Behavior Bucket:** {bucket_name}")
+                    if bucket_description:
+                        st.caption(bucket_description)
+
+                    st.markdown(f"**Behavior Risk Factor:** {risk_factor_display}")
+
+                    # 🔹 NEW: suggested stake based on bucket + sidebar budget
+                    bet_budget = st.session_state.get("bet_budget", 0)
+
+                    # Map DQN action -> fraction of budget to stake
+                    stake_fraction_map = {
+                        "SAFE_PICK": 0.5,          # up to 50% of per-pick budget
+                        "VALUE_BET": 0.35,         # balanced, mid-sized stake
+                        "HIGH_RISK": 0.15,         # small stab on high-risk spots
+                        "EXPLANATION_ONLY": 0.0,   # no stake
+                    }
+                    stake_fraction = stake_fraction_map.get(action_tag, 0.0)
+                    suggested_stake = round(bet_budget * stake_fraction, 2)
+
+                    # Get recommended side from verification output
+                    verify = deep_analysis_result.get("verification", {})
+                    recommended_side = verify.get("recommended_bet_side", "None")
+
+                    if bet_budget > 0 and suggested_stake > 0:
+                        st.markdown(
+                            f"**Suggested Stake:** ${suggested_stake:.2f} "
+                            f"on **{recommended_side}** "
+                            f"(from your ${bet_budget:.2f} per-pick budget)."
+                        )
+                    elif bet_budget > 0 and stake_fraction == 0.0:
+                        st.markdown(
+                            "**Suggested Stake:** $0.00 — this bucket recommends **no bet**, "
+                            "focus on explanation only."
+                        )
+                    else:
+                        st.markdown(
+                            "**Suggested Stake:** $0.00 — set a positive budget in the sidebar to see stake suggestions."
+                        )
+
+                    # Keep profile expander
+                    if user_profile_display:
+                        with st.expander("View Behavior User Profile (DQN Inputs)"):
+                            st.json(user_profile_display)
 
                     ethics_output = deep_analysis_result.get('ethics', {})
                     st.markdown(f"**Ethics Check:** {ethics_output.get('status', 'pending')}")
@@ -484,6 +644,17 @@ else:
                     st.subheader("Full Verification Output")
                     st.json(deep_analysis_result.get("verification", {}))
 
+                    st.subheader("Full Behavior Output")
+                    st.json(deep_analysis_result.get("action", {}))
+
+                    st.subheader("Behavior User Profile (top-level)")
+                    st.json(
+                        deep_analysis_result.get(
+                            "behavior_user_profile",
+                            deep_analysis_result.get("action", {}).get("user_profile", {}),
+                        )
+                    )
+
                     st.subheader("Raw selected_match passed to agents")
                     st.json(deep_analysis_result.get("match", {}))
 
@@ -495,6 +666,7 @@ else:
 
                     st.subheader("Raw Value Edges (All Outcomes)")
                     st.json(deep_analysis_result.get("verification", {}).get("all_value_edges", {}))
+
 
             else:
                 st.error(deep_analysis_result.get("message", "Deep analysis failed for an unknown reason."))

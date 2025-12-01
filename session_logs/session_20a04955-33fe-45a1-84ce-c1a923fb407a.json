@@ -1,0 +1,126 @@
+[
+  {
+    "timestamp": "2025-12-01T05:59:04.996429",
+    "user_context": {
+      "risk_tolerance": "High",
+      "user_id": "default_user"
+    },
+    "behavior_user_profile": {
+      "risk_score": 0.8,
+      "volatility_score": 0.8,
+      "chase_tendency": 0.8,
+      "conservativeness": 0.19999999999999996,
+      "engagement_depth": 0.5,
+      "convert_rate": 0.4,
+      "team_loyalty": 0.5
+    },
+    "behavior_bucket": "Value Bet (Balanced)",
+    "analysis": {
+      "status": "ok",
+      "message": "Deep analysis complete.",
+      "prediction": {
+        "status": "ok",
+        "predicted_winner_model": "Manchester City FC",
+        "home_win_probability": "0.34142643",
+        "away_win_probability": "0.5358411",
+        "draw_probability": "0.122732505",
+        "raw_probabilities": [
+          0.34142643213272095,
+          0.5358411073684692,
+          0.1227325052022934
+        ]
+      },
+      "verification": {
+        "value_edge": "Low",
+        "confidence": "Low",
+        "raw_value_edge": 0.1309,
+        "recommended_bet_side": "Fulham FC_win",
+        "message": "Verification complete.",
+        "all_value_edges": {
+          "Fulham FC_win": 0.1309,
+          "Draw": -0.1212,
+          "Manchester City FC_win": -0.0853
+        }
+      },
+      "action": {
+        "action": "VALUE_BET",
+        "risk_factor": 0.5,
+        "action_index": 1,
+        "bucket_label": "Value Bet (Balanced)",
+        "bucket_description": "Take bets where the model sees a solid positive edge with controlled risk.",
+        "match_context": {
+          "pred_win_prob": 0.45,
+          "odds_spread": 0.0,
+          "implied_edge": 0.1309,
+          "game_importance": 0.4
+        },
+        "user_profile": {
+          "risk_score": 0.8,
+          "volatility_score": 0.8,
+          "chase_tendency": 0.8,
+          "conservativeness": 0.19999999999999996,
+          "engagement_depth": 0.5,
+          "convert_rate": 0.4,
+          "team_loyalty": 0.5
+        }
+      },
+      "behavior_user_profile": {
+        "risk_score": 0.8,
+        "volatility_score": 0.8,
+        "chase_tendency": 0.8,
+        "conservativeness": 0.19999999999999996,
+        "engagement_depth": 0.5,
+        "convert_rate": 0.4,
+        "team_loyalty": 0.5
+      },
+      "behavior_bucket": "Value Bet (Balanced)",
+      "recommendation": {
+        "recommendation_text": "\n1. The match between Fulham FC and Manchester City FC, scheduled for December 2nd, 2025, in the sport of football, has been predicted to be won by Manchester City FC.\n2. As the match is still timed, the final score is not available.\n3. Our prediction model has given a value edge of 0.1309, which is considered low. This means that there is a slight advantage towards Fulham FC winning, but it is not a strong enough value to confidently recommend betting on them.\n4. Based on the predicted winner and the value edge, our recommendation is to place a bet on Fulham FC to win.\n5. We recommend placing a low stake bet on Fulham FC to win, with the understanding that the value edge is not strong. It is important to bet responsibly and not to rely solely on this recommendation.\n6. As an ethical and responsible AI sports betting analyst, we must emphasize that betting should always be done in moderation and within one's means. We do not encourage irresponsible or excessive betting, and always recommend conducting thorough research and analysis before placing any bets. In this case, the value edge is not strong enough to confidently recommend betting, so we advise against placing a bet on this match. "
+      },
+      "ethics": {
+        "status": "pass"
+      },
+      "detailed_stats": [],
+      "detailed_odds": [
+        {
+          "bookmaker": "SportsBet",
+          "home_team_odds": 4.75,
+          "away_team_odds": 1.61,
+          "draw_odds": 4.1
+        }
+      ],
+      "match": {
+        "fixture": {
+          "id": 537919,
+          "date": "2025-12-02T19:30:00Z",
+          "status": "TIMED"
+        },
+        "league": {
+          "name": "Premier League",
+          "season": 2025
+        },
+        "teams": {
+          "home": {
+            "id": 63,
+            "name": "Fulham FC"
+          },
+          "away": {
+            "id": 65,
+            "name": "Manchester City FC"
+          }
+        },
+        "goals": {
+          "home": NaN,
+          "away": NaN
+        },
+        "score": {
+          "fulltime": {
+            "home": NaN,
+            "away": NaN
+          }
+        },
+        "sport_type": "football"
+      }
+    }
+  }
+]

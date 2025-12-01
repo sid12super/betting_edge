@@ -1,0 +1,126 @@
+[
+  {
+    "timestamp": "2025-12-01T05:46:26.883445",
+    "user_context": {
+      "risk_tolerance": "Medium",
+      "user_id": "default_user"
+    },
+    "behavior_user_profile": {
+      "risk_score": 0.5,
+      "volatility_score": 0.5,
+      "chase_tendency": 0.6,
+      "conservativeness": 0.5,
+      "engagement_depth": 0.5,
+      "convert_rate": 0.4,
+      "team_loyalty": 0.5
+    },
+    "behavior_bucket": "Value Bet (Balanced)",
+    "analysis": {
+      "status": "ok",
+      "message": "Deep analysis complete.",
+      "prediction": {
+        "status": "ok",
+        "predicted_winner_model": "Liverpool FC",
+        "home_win_probability": "0.6335562",
+        "away_win_probability": "0.32653",
+        "draw_probability": "0.039913822",
+        "raw_probabilities": [
+          0.6335561871528625,
+          0.32653000950813293,
+          0.03991382196545601
+        ]
+      },
+      "verification": {
+        "value_edge": "High",
+        "confidence": "High",
+        "raw_value_edge": 0.2015,
+        "recommended_bet_side": "Sunderland AFC_win",
+        "message": "Verification complete.",
+        "all_value_edges": {
+          "Liverpool FC_win": -0.1183,
+          "Draw": -0.1601,
+          "Sunderland AFC_win": 0.2015
+        }
+      },
+      "action": {
+        "action": "VALUE_BET",
+        "risk_factor": 0.5,
+        "action_index": 1,
+        "bucket_label": "Value Bet (Balanced)",
+        "bucket_description": "Take bets where the model sees a solid positive edge with controlled risk.",
+        "match_context": {
+          "pred_win_prob": 0.8,
+          "odds_spread": 0.0,
+          "implied_edge": 0.2015,
+          "game_importance": 0.8500000000000001
+        },
+        "user_profile": {
+          "risk_score": 0.5,
+          "volatility_score": 0.5,
+          "chase_tendency": 0.6,
+          "conservativeness": 0.5,
+          "engagement_depth": 0.5,
+          "convert_rate": 0.4,
+          "team_loyalty": 0.5
+        }
+      },
+      "behavior_user_profile": {
+        "risk_score": 0.5,
+        "volatility_score": 0.5,
+        "chase_tendency": 0.6,
+        "conservativeness": 0.5,
+        "engagement_depth": 0.5,
+        "convert_rate": 0.4,
+        "team_loyalty": 0.5
+      },
+      "behavior_bucket": "Value Bet (Balanced)",
+      "recommendation": {
+        "recommendation_text": "\n1. The match is between Liverpool FC and Sunderland AFC in a football game scheduled for December 3rd, 2025. The match status is currently timed and the predicted winner is Liverpool FC.\n\n2. If the match is finished, the final score is not mentioned in the provided information.\n\n3. The value edge for this match is 0.2015, which is considered high. This indicates that there is a potential for a profitable bet, as the odds for Sunderland AFC winning are higher than expected based on the prediction model output.\n\n4. Based on the value edge, the recommended bet side is Sunderland AFC_win with a high level of confidence.\n\n5. Our recommendation is to place a bet on Sunderland AFC to win the match. The value edge and high confidence level suggest that this bet has a higher chance of being profitable.\n\n6. It is important to note that sports betting should always be done responsibly and ethically. It is not a guaranteed way to make money and should not be treated as such. If there is no value edge, we do not recommend placing a bet. It is always important to gamble responsibly and within one's means."
+      },
+      "ethics": {
+        "status": "pass"
+      },
+      "detailed_stats": [],
+      "detailed_odds": [
+        {
+          "bookmaker": "SportsBet",
+          "home_team_odds": 1.33,
+          "away_team_odds": 8.0,
+          "draw_odds": 5.0
+        }
+      ],
+      "match": {
+        "fixture": {
+          "id": 537920,
+          "date": "2025-12-03T20:15:00Z",
+          "status": "TIMED"
+        },
+        "league": {
+          "name": "Premier League",
+          "season": 2025
+        },
+        "teams": {
+          "home": {
+            "id": 64,
+            "name": "Liverpool FC"
+          },
+          "away": {
+            "id": 71,
+            "name": "Sunderland AFC"
+          }
+        },
+        "goals": {
+          "home": NaN,
+          "away": NaN
+        },
+        "score": {
+          "fulltime": {
+            "home": NaN,
+            "away": NaN
+          }
+        },
+        "sport_type": "football"
+      }
+    }
+  }
+]

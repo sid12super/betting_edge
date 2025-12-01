@@ -116,66 +116,103 @@ class BettingEdgePipeline:
             "original_query_params": parsed_query_obj.dict()
         }
 
-    def run_deep_analysis(self, selected_match: dict):
+    def run_deep_analysis(
+        self,
+        selected_match: dict,
+        user_context: Optional[Dict[str, Any]] = None,
+    ):
         """
         Runs the deep analysis pipeline for a single selected match.
+        Optionally takes a user_context dict with fields like:
+            {
+                "risk_tolerance": "Low" | "Medium" | "High",
+                "user_id": "some-identifier"
+            }
         """
         match_id = selected_match["fixture"]["id"]
-        sport_type = selected_match.get("sport_type") # Get sport_type from the transformed match
+        sport_type = selected_match.get("sport_type")  # Get sport_type from the transformed match
 
         if not sport_type:
             return {"status": "error", "message": "Sport type not found in selected match for deep analysis."}
 
-        # Re-initialize VerificationAgentLC here with the correct sport_type
-        # This ensures its internal DataAgent is correctly configured for the sport.
-        self.verification_agent = VerificationAgentLC(sport_type=sport_type) # Pass sport_type
+        # 0. User context defaults
+        user_risk_tolerance = "Medium"
+        user_id = "default_user"
+        if user_context:
+            user_risk_tolerance = user_context.get("risk_tolerance", user_risk_tolerance)
+            user_id = user_context.get("user_id", user_id)
 
-        # 1. Prediction Agent (It will use its internal DataAgent or expect data)
+        # 1. Re-initialize VerificationAgentLC here with the correct sport_type
+        #    This ensures its internal DataAgent is correctly configured for the sport.
+        self.verification_agent = VerificationAgentLC(sport_type=sport_type)
+
+        # 2. Prediction Agent
         prediction_output = self.prediction_agent.invoke(selected_match)
-        
-        # 2. Verification Agent
-        # VerificationAgentLC will use its *own* internal DataAgent (initialized with sport_type)
-        # to fetch live odds as part of its invoke.
+
+        # 3. Verification Agent
         verification_output = self.verification_agent.invoke({
             "match": selected_match,
             "prediction": prediction_output,
         })
-        
-        # 3. Behavior Agent (DQN Simulation Placeholder)
+
+        # 4. Behavior Agent (DQN-based user behavior)
         behavior_input = {
-            "raw_value_edge": verification_output.get('raw_value_edge', 0.0),
-            "confidence": verification_output.get('confidence', 'Low'),
-            "user_risk_tolerance": "Medium"
+            # Core value signal
+            "raw_value_edge": verification_output.get("raw_value_edge", 0.0),
+            "confidence": verification_output.get("confidence", "Low"),
+            "value_edge_rating": verification_output.get("value_edge", "Low"),
+            "recommended_bet_side": verification_output.get("recommended_bet_side", "None"),
+            "all_value_edges": verification_output.get("all_value_edges", {}),
+
+            # Model probabilities (for state construction)
+            "model_home_prob": prediction_output.get("home_win_probability", 0.0),
+            "model_draw_prob": prediction_output.get("draw_probability", 0.0),
+            "model_away_prob": prediction_output.get("away_win_probability", 0.0),
+
+            # User personalization
+            "user_risk_tolerance": user_risk_tolerance,
+            "user_id": user_id,
         }
         behavior_action = self.behavior_agent.invoke(behavior_input)
-        
-        # 4. Recommendation Agent (Synthesis)
+
+        # 5. Recommendation Agent (Synthesis)
         recommendation_output = self.recommendation_agent.invoke({
             "match": selected_match,
             "prediction_output": prediction_output,
             "verification_output": verification_output,
             "behavior_output": behavior_action,
         })
-        
-        # 5. Ethics Agent (Final Gate)
-        ethics_output = self.ethics_agent.invoke(recommendation_output.get('recommendation_text', ''))
 
-        # Data for display, if you still need these for a summary
-        # Re-get the session-managed data agent to fetch these details for display.
+        # 6. Ethics Agent (Final Gate)
+        ethics_output = self.ethics_agent.invoke(
+            recommendation_output.get("recommendation_text", "")
+        )
+
+        # 7. Optional: extra match context for display
         current_data_agent = init_data_agent(sport_type)
         match_context = current_data_agent.get_full_match_context(match_id)
-        
+
         detailed_stats_data = match_context.get("home_team_stats", {})
         detailed_odds_data = match_context.get("latest_odds", {})
-        
+
+        # 8. Extract behavior profile & bucket for logging / export
+        behavior_profile = None
+        behavior_bucket = None
+        if isinstance(behavior_action, dict):
+            behavior_profile = behavior_action.get("user_profile")
+            behavior_bucket = behavior_action.get("bucket_label") or behavior_action.get("action")
+
         return {
             "status": "ok",
             "message": "Deep analysis complete.",
             "prediction": prediction_output,
             "verification": verification_output,
             "action": behavior_action,
+            "behavior_user_profile": behavior_profile,   # 🔹 explicit
+            "behavior_bucket": behavior_bucket,          # 🔹 explicit
             "recommendation": recommendation_output,
             "ethics": ethics_output,
             "detailed_stats": [detailed_stats_data] if detailed_stats_data else [],
-            "detailed_odds": [detailed_odds_data] if detailed_odds_data else []
+            "detailed_odds": [detailed_odds_data] if detailed_odds_data else [],
+            "match": selected_match,
         }

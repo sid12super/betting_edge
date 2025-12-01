@@ -1,0 +1,126 @@
+[
+  {
+    "timestamp": "2025-12-01T05:51:51.642974",
+    "user_context": {
+      "risk_tolerance": "Low",
+      "user_id": "default_user"
+    },
+    "behavior_user_profile": {
+      "risk_score": 0.2,
+      "volatility_score": 0.2,
+      "chase_tendency": 0.3,
+      "conservativeness": 0.8,
+      "engagement_depth": 0.5,
+      "convert_rate": 0.4,
+      "team_loyalty": 0.5
+    },
+    "behavior_bucket": "Safe Pick (Conservative)",
+    "analysis": {
+      "status": "ok",
+      "message": "Deep analysis complete.",
+      "prediction": {
+        "status": "ok",
+        "predicted_winner_model": "Liverpool FC",
+        "home_win_probability": "0.36803445",
+        "away_win_probability": "0.46840295",
+        "draw_probability": "0.16356263",
+        "raw_probabilities": [
+          0.3680344521999359,
+          0.4684029519557953,
+          0.1635626256465912
+        ]
+      },
+      "verification": {
+        "value_edge": "Low",
+        "confidence": "Low",
+        "raw_value_edge": 0.1299,
+        "recommended_bet_side": "Leeds United FC_win",
+        "message": "Verification complete.",
+        "all_value_edges": {
+          "Leeds United FC_win": 0.1299,
+          "Draw": -0.0996,
+          "Liverpool FC_win": -0.103
+        }
+      },
+      "action": {
+        "action": "SAFE_PICK",
+        "risk_factor": 0.2,
+        "action_index": 0,
+        "bucket_label": "Safe Pick (Conservative)",
+        "bucket_description": "Focus on lower-risk opportunities, even if the edge is modest.",
+        "match_context": {
+          "pred_win_prob": 0.45,
+          "odds_spread": 0.0,
+          "implied_edge": 0.1299,
+          "game_importance": 0.4
+        },
+        "user_profile": {
+          "risk_score": 0.2,
+          "volatility_score": 0.2,
+          "chase_tendency": 0.3,
+          "conservativeness": 0.8,
+          "engagement_depth": 0.5,
+          "convert_rate": 0.4,
+          "team_loyalty": 0.5
+        }
+      },
+      "behavior_user_profile": {
+        "risk_score": 0.2,
+        "volatility_score": 0.2,
+        "chase_tendency": 0.3,
+        "conservativeness": 0.8,
+        "engagement_depth": 0.5,
+        "convert_rate": 0.4,
+        "team_loyalty": 0.5
+      },
+      "behavior_bucket": "Safe Pick (Conservative)",
+      "recommendation": {
+        "recommendation_text": "\n1. The teams involved in this match are Leeds United FC and Liverpool FC. The match status is \"Timed\" and the predicted winner according to our model is Liverpool FC.\n\n2. As the match is still yet to be played, there is no final score to report.\n\n3. Our prediction model has identified a value edge of 0.1299, indicating a potential betting opportunity. However, the value edge rating is low, meaning there is not a significant enough advantage to confidently recommend a bet on either side.\n\n4. Our recommended bet side is Leeds United FC to win, but with a low level of confidence. This is due to the low value edge and the unpredictable nature of sports.\n\n5. Based on our analysis, we recommend against betting on this match. While there is a small value edge in favor of Leeds United FC, it is not significant enough to outweigh the unpredictable nature of sports and the low confidence in our recommendation.\n\n6. It is important to remember that betting on sports should always be done ethically and responsibly. It is never a guaranteed win and should not be treated as a source of income. We urge all individuals to only bet within their means and to prioritize responsible decision making. "
+      },
+      "ethics": {
+        "status": "pass"
+      },
+      "detailed_stats": [],
+      "detailed_odds": [
+        {
+          "bookmaker": "SportsBet",
+          "home_team_odds": 4.2,
+          "away_team_odds": 1.75,
+          "draw_odds": 3.8
+        }
+      ],
+      "match": {
+        "fixture": {
+          "id": 537930,
+          "date": "2025-12-06T17:30:00Z",
+          "status": "TIMED"
+        },
+        "league": {
+          "name": "Premier League",
+          "season": 2025
+        },
+        "teams": {
+          "home": {
+            "id": 341,
+            "name": "Leeds United FC"
+          },
+          "away": {
+            "id": 64,
+            "name": "Liverpool FC"
+          }
+        },
+        "goals": {
+          "home": NaN,
+          "away": NaN
+        },
+        "score": {
+          "fulltime": {
+            "home": NaN,
+            "away": NaN
+          }
+        },
+        "sport_type": "football"
+      }
+    }
+  }
+]
