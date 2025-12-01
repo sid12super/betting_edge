@@ -87,9 +87,9 @@ class VerificationAgentLC(Runnable):
         # 5. Assign Qualitative Rating based on the *max_positive_edge*
         # (Using the same thresholds as before)
         confidence_rating = "Low" # Changed variable name to avoid confusion with pipeline 'confidence'
-        if max_positive_edge > 0.07:
+        if max_positive_edge > 0.2:
             confidence_rating = "High"
-        elif max_positive_edge > 0.04:
+        elif max_positive_edge > 0.15:
             confidence_rating = "Medium"
             
         return {
