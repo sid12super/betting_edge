@@ -522,8 +522,19 @@ else:
 
             if deep_analysis_result.get("status") == "ok":
                 st.success("Deep Analysis Complete!")
+
+                # Optional: past-match notice
+                selected_match = selected_match_for_analysis
+                status = (selected_match.get("fixture", {}).get("status") or "").lower()
+                if status in ["finished", "ft", "full-time", "match finished", "completed"]:
+                    st.info(
+                        "ℹ️ This is a past match. The assistant will provide retrospective "
+                        "analysis only, not betting advice."
+                    )
+
                 st.markdown("---")
 
+                # -------- ROW 1: Prediction + Value --------
                 col1, col2 = st.columns(2)
 
                 with col1:
@@ -550,11 +561,18 @@ else:
                 with col2:
                     st.subheader("Value Verification")
                     verify = deep_analysis_result.get('verification', {})
-                    # Ensure value is displayed correctly, handle potential None or non-numeric
                     raw_value_edge = verify.get('raw_value_edge')
-                    raw_value_edge_display = f"{raw_value_edge:.2%}" if isinstance(raw_value_edge, (int, float)) else "N/A"
+                    raw_value_edge_display = (
+                        f"{raw_value_edge:.2%}"
+                        if isinstance(raw_value_edge, (int, float))
+                        else "N/A"
+                    )
 
-                    st.metric(label="Raw Value Edge", value=raw_value_edge_display, delta=f"Rating: {verify.get('value_edge_rating', 'N/A')}")
+                    st.metric(
+                        label="Raw Value Edge",
+                        value=raw_value_edge_display,
+                        delta=f"Rating: {verify.get('value_edge_rating', 'N/A')}",
+                    )
                     st.metric(
                         label="Recommended Bet Side",
                         value=verify.get('recommended_bet_side', 'None'),
@@ -564,6 +582,12 @@ else:
                         value=verify.get('confidence', 'Low'),
                     )
 
+                # -------- ROW 2: Behavior + Ethics (NEW LAYOUT) --------
+                st.divider()
+                beh_col, eth_col = st.columns([2, 1])
+
+                # ---- Behavior column ----
+                with beh_col:
                     st.subheader("Behavior Action & Ethics")
                     action_output = deep_analysis_result.get('action', {})
 
@@ -591,20 +615,18 @@ else:
 
                     st.markdown(f"**Behavior Risk Factor:** {risk_factor_display}")
 
-                    # 🔹 NEW: suggested stake based on bucket + sidebar budget
+                    # Budget-based suggested stake
                     bet_budget = st.session_state.get("bet_budget", 0)
 
-                    # Map DQN action -> fraction of budget to stake
                     stake_fraction_map = {
                         "SAFE_PICK": 0.5,          # up to 50% of per-pick budget
-                        "VALUE_BET": 0.35,         # balanced, mid-sized stake
-                        "HIGH_RISK": 0.15,         # small stab on high-risk spots
+                        "VALUE_BET": 0.35,         # balanced stake
+                        "HIGH_RISK": 0.15,         # small stake on high risk
                         "EXPLANATION_ONLY": 0.0,   # no stake
                     }
                     stake_fraction = stake_fraction_map.get(action_tag, 0.0)
                     suggested_stake = round(bet_budget * stake_fraction, 2)
 
-                    # Get recommended side from verification output
                     verify = deep_analysis_result.get("verification", {})
                     recommended_side = verify.get("recommended_bet_side", "None")
 
@@ -621,16 +643,35 @@ else:
                         )
                     else:
                         st.markdown(
-                            "**Suggested Stake:** $0.00 — set a positive budget in the sidebar to see stake suggestions."
+                            "**Suggested Stake:** $0.00 — set a positive budget in the "
+                            "sidebar to see stake suggestions."
                         )
 
-                    # Keep profile expander
                     if user_profile_display:
                         with st.expander("View Behavior User Profile (DQN Inputs)"):
                             st.json(user_profile_display)
 
-                    ethics_output = deep_analysis_result.get('ethics', {})
-                    st.markdown(f"**Ethics Check:** {ethics_output.get('status', 'pending')}")
+                # ---- Ethics column ----
+                with eth_col:
+                    st.subheader("Ethics & Safety")
+                    ethics_output = deep_analysis_result.get("ethics", {})
+                    ethics_status = ethics_output.get("status", "pending")
+                    st.markdown(f"**Ethics Check:** `{ethics_status}`")
+
+                    viol_prob = ethics_output.get("violation_prob")
+                    safe_prob = ethics_output.get("safe_prob")
+                    backend = ethics_output.get("backend", "unknown")
+
+                    if isinstance(viol_prob, (int, float)) and isinstance(safe_prob, (int, float)):
+                        st.caption(
+                            f"Ethics classifier backend: `{backend}` · "
+                            f"Violation probability: **{viol_prob:.1%}**, "
+                            f"Safe probability: **{safe_prob:.1%}**"
+                        )
+                    else:
+                        st.caption(f"Ethics backend: `{backend}` (no scores available)")
+
+
 
                 st.divider()
                 st.subheader("📝 Final Recommendation (LLM Synthesis)")
