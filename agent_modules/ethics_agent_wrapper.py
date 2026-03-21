@@ -40,20 +40,28 @@ class EthicsAgentLC(Runnable):
         self.enabled = False
 
         if HF_AVAILABLE and os.path.isdir(self.model_path):
-            # Select device
-            self.device = "cuda" if torch.cuda.is_available() else "cpu"
+            try:
+                # Select device
+                self.device = "cuda" if torch.cuda.is_available() else "cpu"
 
-            # Load tokenizer & model
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
-            self.model = AutoModelForSequenceClassification.from_pretrained(
-                self.model_path,
-                torch_dtype=torch.float16
-                if self.device == "cuda"
-                else torch.float32,
-            ).to(self.device)
+                # Load tokenizer & model
+                self.tokenizer = AutoTokenizer.from_pretrained(self.model_path)
+                self.model = AutoModelForSequenceClassification.from_pretrained(
+                    self.model_path,
+                    torch_dtype=torch.float16
+                    if self.device == "cuda"
+                    else torch.float32,
+                ).to(self.device)
 
-            self.model.eval()
-            self.enabled = True
+                self.model.eval()
+                self.enabled = True
+            except Exception as e:
+                # Gracefully handle tokenizer compatibility or other loading errors
+                print(f"⚠️  Ethics classifier failed to load: {e}. Running in disabled mode.")
+                self.device = None
+                self.tokenizer = None
+                self.model = None
+                self.enabled = False
         else:
             # No HF stack or model folder -> run in "disabled" mode
             self.device = None
