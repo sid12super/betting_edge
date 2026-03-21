@@ -321,12 +321,13 @@ with st.sidebar:
                     "Serie A": 135,
                     "Bundesliga": 78,
                     "Ligue 1": 61,
+                    "Champions League": 2001,
                 }
                 selected_league = st.selectbox(
                     "Select League", options=list(league_options.keys())
                 )
                 season = st.number_input(
-                    "Season", min_value=2020, max_value=2025, value=2023
+                    "Season", min_value=2020, max_value=2026, value=2023
                 )
 
                 if st.button("📥 Fetch Matches"):
@@ -350,7 +351,7 @@ with st.sidebar:
 
             else: # College Football/Basketball
                 year = st.number_input(
-                    "Year", min_value=2020, max_value=2025, value=2024
+                    "Year", min_value=2020, max_value=2026, value=2024
                 )
                 if st.button("📥 Fetch Games"):
                     with st.spinner("Fetching..."):

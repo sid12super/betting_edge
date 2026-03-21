@@ -4,6 +4,8 @@ __pycache__/
 
 # Environment
 .env
+# Ignore the CLAUDE.md file which contains sensitive information
+CLAUDE.md
 
 # Database
 *.db

@@ -122,7 +122,7 @@ class DataAgent:
         elif self.sport_type == "basketball":
             return self._fetch_college_data(path="/games", year=year or season, week=week)
         else: # football
-            id_map = {39: 'PL', 140: 'PD', 135: 'SA', 78: 'BL1', 61: 'FL1'}
+            id_map = {39: 'PL', 140: 'PD', 135: 'SA', 78: 'BL1', 61: 'FL1', 2001: 'CL'}
             competition_code = id_map.get(league_id, 'PL')
             return self._fetch_football_data_org(competition_code, season)
 
@@ -291,6 +291,7 @@ class DataAgent:
                 "Serie A": "soccer_italy_serie_a",
                 "Bundesliga": "soccer_germany_bundesliga1",
                 "Ligue 1": "soccer_france_ligue_1",
+                "UEFA Champions League": "soccer_uefa_champs_league",
                 "DEFAULT": "soccer",
             },
             "college_football": {
