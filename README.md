@@ -4,11 +4,7 @@ AI-powered sports betting analysis. Ask a question in plain English, get back a 
 
 Supports **Soccer (Football)**, **College Football**, and **College Basketball**.
 
----
 
-## 🖼️ Screenshots
-
-<!-- screenshots here -->
 
 ---
 
