@@ -359,6 +359,103 @@ class DataAgent:
 
         # 4. Find the matching event in the API response (ROBUST MATCHING)
         # Strip common prefixes/suffixes like "FC", "AFC", "United" to improve matching
+        # Manual alias map: DB name fragment → Odds API name fragment (both lowercased, accent-stripped)
+        _TEAM_ALIASES = {
+            # UCL / international
+            "sporting clube de portugal": "sporting lisbon",
+            "sporting cp": "sporting lisbon",
+            "club atletico de madrid": "atletico madrid",
+            "atletico de madrid": "atletico madrid",
+            "fc internazionale milano": "inter milan",
+            "inter milano": "inter milan",
+            "internazionale": "inter milan",
+            "borussia dortmund": "dortmund",
+            "rb leipzig": "leipzig",
+            "rasenballsport leipzig": "leipzig",
+            "arsenal fc": "arsenal",
+            "chelsea fc": "chelsea",
+            "manchester city fc": "manchester city",
+            "manchester united fc": "manchester united",
+            "liverpool fc": "liverpool",
+            "tottenham hotspur fc": "tottenham hotspur",
+            "aston villa fc": "aston villa",
+            "newcastle united fc": "newcastle united",
+            "west ham united fc": "west ham",
+            "wolverhampton wanderers fc": "wolves",
+            "wolverhampton wanderers": "wolves",
+            "nottingham forest fc": "nottingham forest",
+            "brighton & hove albion fc": "brighton",
+            "brighton and hove albion": "brighton",
+            "brentford fc": "brentford",
+            "fulham fc": "fulham",
+            "crystal palace fc": "crystal palace",
+            "everton fc": "everton",
+            "ipswich town fc": "ipswich",
+            "leicester city fc": "leicester",
+            "southampton fc": "southampton",
+            "paris saint-germain fc": "paris saint-germain",
+            "paris saint germain": "paris saint-germain",
+            "olympique de marseille": "marseille",
+            "olympique lyonnais": "lyon",
+            "stade rennais fc": "rennes",
+            "rc lens": "lens",
+            "ogc nice": "nice",
+            "as monaco fc": "monaco",
+            "fc girondins de bordeaux": "bordeaux",
+            "fc nantes": "nantes",
+            "fc lorient": "lorient",
+            "fc metz": "metz",
+            "stade brestois 29": "brest",
+            "bayer 04 leverkusen": "bayer leverkusen",
+            "bayer leverkusen": "leverkusen",
+            "fc bayern munchen": "bayern munich",
+            "fc bayern münchen": "bayern munich",
+            "vfb stuttgart": "stuttgart",
+            "eintracht frankfurt": "frankfurt",
+            "sc freiburg": "freiburg",
+            "1. fc union berlin": "union berlin",
+            "1. fsv mainz 05": "mainz",
+            "tsg 1899 hoffenheim": "hoffenheim",
+            "sv werder bremen": "werder bremen",
+            "vfl wolfsburg": "wolfsburg",
+            "vfl bochum 1848": "bochum",
+            "fc augsburg": "augsburg",
+            "1. fc heidenheim 1846": "heidenheim",
+            "fc st. pauli 1910": "st. pauli",
+            "ac milan": "milan",
+            "as roma": "roma",
+            "ssc napoli": "napoli",
+            "juventus fc": "juventus",
+            "acf fiorentina": "fiorentina",
+            "s.s. lazio": "lazio",
+            "ss lazio": "lazio",
+            "atalanta bc": "atalanta",
+            "torino fc": "torino",
+            "udinese calcio": "udinese",
+            "us sassuolo calcio": "sassuolo",
+            "fc empoli": "empoli",
+            "hellas verona fc": "verona",
+            "cagliari calcio": "cagliari",
+            "bologna fc 1909": "bologna",
+            "real madrid cf": "real madrid",
+            "fc barcelona": "barcelona",
+            "sevilla fc": "sevilla",
+            "villarreal cf": "villarreal",
+            "real betis balompie": "real betis",
+            "real betis balompié": "real betis",
+            "athletic club": "athletic bilbao",
+            "real sociedad de futbol": "real sociedad",
+            "deportivo alaves": "alaves",
+            "getafe cf": "getafe",
+            "rayo vallecano de madrid": "rayo vallecano",
+            "ud las palmas": "las palmas",
+            "cd leganes": "leganes",
+            "real valladolid cf": "valladolid",
+            "girona fc": "girona",
+            "osasuna": "osasuna",
+            "cd espanyol de barcelona": "espanyol",
+        }
+
         def normalize_team_name(name):
             """Remove common prefixes/suffixes and extra words for better matching."""
             import unicodedata
@@ -368,6 +465,11 @@ class DataAgent:
             name = ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn')
             # Normalize ampersands and "and"
             name = name.replace(' & ', ' and ')
+
+            # Apply manual alias map before further stripping
+            if name in _TEAM_ALIASES:
+                return _TEAM_ALIASES[name]
+
             # Remove common club prefixes (but keep meaningful parts like "real", "athletic")
             prefixes = ['afc ', 'fc ', 'club ', 'ca ']
             for prefix in prefixes:
@@ -380,6 +482,11 @@ class DataAgent:
             for suffix in suffixes:
                 if name.endswith(suffix):
                     name = name[:-len(suffix)].strip()
+
+            # Re-check alias map after stripping (catches "fc barcelona" → "barcelona" → alias)
+            if name in _TEAM_ALIASES:
+                return _TEAM_ALIASES[name]
+
             return name
 
         target_match_odds = None
