@@ -460,7 +460,9 @@ class DataAgent:
             """Remove common prefixes/suffixes and extra words for better matching."""
             import unicodedata
 
-            name = name.lower().strip()
+            if not name:
+                return ""
+            name = str(name).lower().strip()
             # Remove accents (é -> e, á -> a, etc.)
             name = ''.join(c for c in unicodedata.normalize('NFD', name) if unicodedata.category(c) != 'Mn')
             # Normalize ampersands and "and"
