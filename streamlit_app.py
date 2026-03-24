@@ -557,6 +557,9 @@ else:
                              'finished','completed','Match Cancelled'
                          )
                          AND match_date >= datetime('now', '-1 day')
+                         AND match_id IS NOT NULL
+                         AND home_team_name IS NOT NULL AND home_team_name != ''
+                         AND away_team_name IS NOT NULL AND away_team_name != ''
                        ORDER BY match_date ASC
                        LIMIT 20""",
                     _conn,
