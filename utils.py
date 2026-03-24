@@ -70,7 +70,7 @@ def fetch_matches_from_db(sport_type: str, team_name: Optional[str] = None,
         query += " AND (home_team_name LIKE ? OR away_team_name LIKE ?)"
         params.extend([f"%{team_name}%", f"%{team_name}%"])
 
-    if league_name:
+    if league_name and league_name != "All Leagues":
         query += " AND league_name LIKE ?"
         params.append(f"%{league_name}%")
     
