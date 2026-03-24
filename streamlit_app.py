@@ -117,6 +117,10 @@ div[data-testid="column"] .gc-wrapper{flex:1!important;}
 /* Metric widget tweak */
 div[data-testid="stMetric"]{background:rgba(255,255,255,.03);border-radius:10px;
   padding:12px 16px;border:1px solid rgba(255,255,255,.06);}
+
+/* Hide hamburger menu and Streamlit footer for clean public-facing UI */
+#MainMenu{visibility:hidden;}
+footer{visibility:hidden;}
 </style>
 """, unsafe_allow_html=True)
 
@@ -1256,6 +1260,183 @@ else:
                 """,
             )
 
+            # ── Session Log Analytics ──────────────────────────────────────────
+            st.divider()
+            st.subheader("📈 Analysis Activity")
+
+            _log_dir = Path("session_logs")
+            _all_entries = []
+            if _log_dir.exists():
+                for _lf in sorted(_log_dir.glob("session_*.json")):
+                    try:
+                        with open(_lf) as _f:
+                            _raw = json.load(_f)
+                        if isinstance(_raw, list):
+                            _all_entries.extend(_raw)
+                        elif isinstance(_raw, dict):
+                            _all_entries.append(_raw)
+                    except Exception:
+                        pass
+
+            if not _all_entries:
+                st.info("No analysis sessions logged yet. Run a deep analysis in the AI Assistant tab to start tracking.")
+            else:
+                from collections import Counter as _Counter
+
+                # ── Metrics ───────────────────────────────────────────────────
+                _total = len(_all_entries)
+
+                _edges = []
+                for _e in _all_entries:
+                    try:
+                        _edges.append(float(_e.get("analysis", {}).get("verification", {}).get("raw_value_edge")))
+                    except (TypeError, ValueError):
+                        pass
+                _avg_edge = sum(_edges) / len(_edges) if _edges else None
+
+                _ethics_list = [_e.get("analysis", {}).get("ethics", {}).get("status") for _e in _all_entries]
+                _pass_rate = sum(1 for s in _ethics_list if s == "pass") / len(_ethics_list) if _ethics_list else 0
+
+                _teams = []
+                for _e in _all_entries:
+                    _m = (_e.get("analysis") or {}).get("match") or {}
+                    _ht = (_m.get("teams") or {}).get("home", {}).get("name")
+                    _at = (_m.get("teams") or {}).get("away", {}).get("name")
+                    if _ht and _ht not in ("None", ""):
+                        _teams.append(_ht)
+                    if _at and _at not in ("None", ""):
+                        _teams.append(_at)
+                _top_team = _Counter(_teams).most_common(1)[0][0] if _teams else "N/A"
+
+                _buckets = []
+                for _e in _all_entries:
+                    _b = _e.get("behavior_bucket") or (_e.get("analysis") or {}).get("action", {}).get("bucket_label")
+                    if _b:
+                        _buckets.append(str(_b))
+                _top_bucket = _Counter(_buckets).most_common(1)[0][0] if _buckets else "N/A"
+                _top_bucket_short = _top_bucket.split("(")[0].strip() if _top_bucket != "N/A" else "N/A"
+
+                _mc1, _mc2, _mc3, _mc4, _mc5 = st.columns(5)
+                _mc1.metric("Total Analyses", _total)
+                _mc2.metric("Avg Value Edge", f"{_avg_edge:.2%}" if _avg_edge is not None else "N/A")
+                _mc3.metric("Ethics Pass Rate", f"{_pass_rate:.0%}")
+                _mc4.metric("Top Team", _top_team[:22] if _top_team != "N/A" else "N/A")
+                _mc5.metric("Top Bucket", _top_bucket_short)
+
+                st.markdown("")
+
+                import plotly.express as px
+
+                # Shared dark layout applied to all charts (no legend key — set per chart)
+                _dark_layout = dict(
+                    paper_bgcolor="rgba(14,17,23,0)",
+                    plot_bgcolor="rgba(14,17,23,0)",
+                    font_color="#8B8F97",
+                    margin=dict(l=0, r=0, t=28, b=0),
+                )
+
+                # Gradient palettes matching the card border theme
+                _LEAGUE_COLORS = [
+                    "#00D2FF", "#2BB8FF", "#569EFF", "#7B84FF",
+                    "#9D6AFF", "#BF50FF", "#E036FF", "#FF0080",
+                ]
+                _BUCKET_COLORS = {
+                    "SAFE_PICK":         "#00E676",
+                    "Safe Pick":         "#00E676",
+                    "Value Bet":         "#FFB300",
+                    "VALUE_BET":         "#FFB300",
+                    "High Risk":         "#FF5252",
+                    "HIGH_RISK":         "#FF5252",
+                    "Explanation Only":  "#8B8F97",
+                    "EXPLANATION_ONLY":  "#8B8F97",
+                }
+
+                # ── Charts row ───────────────────────────────────────────────
+                _ch1, _ch2 = st.columns(2)
+
+                with _ch1:
+                    st.markdown("**Analyses by League**")
+                    _league_counts = _Counter(
+                        ((_e.get("analysis") or {}).get("match") or {}).get("league", {}).get("name") or "Unknown"
+                        for _e in _all_entries
+                    )
+                    _lg_items = sorted(_league_counts.items(), key=lambda x: -x[1])[:8]
+                    _lg_labels = [x[0] for x in _lg_items]
+                    _lg_values = [x[1] for x in _lg_items]
+                    _lg_colors = [_LEAGUE_COLORS[i % len(_LEAGUE_COLORS)] for i in range(len(_lg_labels))]
+                    _fig_lg = px.bar(
+                        x=_lg_values, y=_lg_labels, orientation="h",
+                        labels={"x": "Analyses", "y": ""},
+                        color=_lg_labels,
+                        color_discrete_sequence=_lg_colors,
+                    )
+                    _fig_lg.update_layout(**_dark_layout, showlegend=False)
+                    _fig_lg.update_traces(marker_line_width=0)
+                    _fig_lg.update_xaxes(gridcolor="rgba(255,255,255,0.05)", zeroline=False)
+                    _fig_lg.update_yaxes(gridcolor="rgba(0,0,0,0)")
+                    st.plotly_chart(_fig_lg, use_container_width=True)
+
+                with _ch2:
+                    st.markdown("**Behavior Bucket Distribution**")
+                    if _buckets:
+                        _bkt_counts = _Counter(_buckets)
+                        _bkt_short = {}
+                        for _k, _v in _bkt_counts.items():
+                            _short = _k.split("(")[0].strip()
+                            _bkt_short[_short] = _bkt_short.get(_short, 0) + _v
+                        _bkt_labels = list(_bkt_short.keys())
+                        _bkt_values = list(_bkt_short.values())
+                        _bkt_clrs = [_BUCKET_COLORS.get(_l, "#7B2FFF") for _l in _bkt_labels]
+                        _fig_bkt = px.bar(
+                            x=_bkt_labels, y=_bkt_values,
+                            labels={"x": "", "y": "Count"},
+                            color=_bkt_labels,
+                            color_discrete_sequence=_bkt_clrs,
+                        )
+                        _fig_bkt.update_layout(**_dark_layout, showlegend=False)
+                        _fig_bkt.update_traces(marker_line_width=0)
+                        _fig_bkt.update_xaxes(gridcolor="rgba(0,0,0,0)")
+                        _fig_bkt.update_yaxes(gridcolor="rgba(255,255,255,0.05)", zeroline=False)
+                        st.plotly_chart(_fig_bkt, use_container_width=True)
+
+                # ── DB Coverage pie ───────────────────────────────────────────
+                st.markdown("**Matches Stored in Database by League**")
+                st.caption("Shows what's already fetched — gaps here = use Manual Data Tools to fill")
+                _pie_conn = get_db_connection()
+                _pie_df = pd.read_sql_query(
+                    "SELECT league_name, COUNT(*) as matches FROM matches "
+                    "WHERE sport_type = ? AND league_name IS NOT NULL "
+                    "GROUP BY league_name ORDER BY matches DESC",
+                    _pie_conn,
+                    params=(st.session_state.sport_type,),
+                )
+                _pie_conn.close()
+                if not _pie_df.empty:
+                    _pie_colors = [_LEAGUE_COLORS[i % len(_LEAGUE_COLORS)] for i in range(len(_pie_df))]
+                    _fig_pie = px.pie(
+                        _pie_df, values="matches", names="league_name",
+                        hole=0.45,
+                        color_discrete_sequence=_pie_colors,
+                    )
+                    _fig_pie.update_traces(
+                        textposition="outside",
+                        textinfo="label+percent",
+                        textfont_color="#E8EAED",
+                        marker=dict(line=dict(color="rgba(14,17,23,1)", width=2)),
+                    )
+                    _fig_pie.update_layout(
+                        **_dark_layout,
+                        showlegend=True,
+                        legend=dict(
+                            font_color="#8B8F97",
+                            orientation="v",
+                        ),
+                    )
+                    st.plotly_chart(_fig_pie, use_container_width=True)
+                else:
+                    st.info("No matches in database yet for this sport type.")
+
+            # ── Latest Matches ─────────────────────────────────────────────────
             st.divider()
             st.subheader("📅 Latest Matches")
 
