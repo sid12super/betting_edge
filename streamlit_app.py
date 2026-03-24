@@ -29,6 +29,10 @@ from pipelines.pipeline import BettingEdgePipeline
 # NEW: Odds API agent
 from odds_agent import OddsAgent
 
+# Scan Mode — direct agent access for batching
+from agent_modules.prediction_agent_wrapper import PredictionAgentLC
+from agent_modules.verification_agent_wrapper import VerificationAgentLC
+
 load_dotenv()
 
 # Page configuration
@@ -160,6 +164,11 @@ if "odds_agent" not in st.session_state:
 
 if "session_id" not in st.session_state:
     st.session_state.session_id = str(uuid.uuid4())
+
+if "scan_results" not in st.session_state:
+    st.session_state.scan_results = None
+if "scan_league_label" not in st.session_state:
+    st.session_state.scan_league_label = ""
 
 
 # NEW: helper to map our sport_type -> Odds API sport key
@@ -476,27 +485,268 @@ else:
             "The system will parse your request, fetch data, run prediction, verification, behavior selection, recommendation, and ethics checks."
         )
 
-        # ── Betting Profile card ───────────────────────────────────────────────
-        render_card(
-            "Your Betting Profile",
-            """
-            <div class="card-metric-row">
-              <div class="card-metric" style="flex:0 0 auto;">
-                <div class="cm-label">Risk Mode</div>
-                <div class="cm-value" id="risk-badge" style="font-size:1.1rem;">▼ set below</div>
-              </div>
-              <div class="card-metric">
-                <div class="cm-label">Low Risk</div>
-                <div class="cm-sub">Prefer safer, higher-probability picks</div>
-              </div>
-              <div class="card-metric">
-                <div class="cm-label">Medium Risk</div>
-                <div class="cm-sub">Balance between safety and value edge</div>
-              </div>
-              <div class="card-metric">
-                <div class="cm-label">High Risk</div>
-                <div class="cm-sub">Aggressive bets with higher return potential</div>
-              </div>
+        if st.session_state.sport_type == "football":
+            assistant_mode = st.radio(
+                "Mode",
+                ["Query Mode", "Scan Mode"],
+                horizontal=True,
+                key="assistant_mode",
+            )
+        else:
+            assistant_mode = "Query Mode"
+
+        # ── SCAN MODE ─────────────────────────────────────────────────────────
+        if assistant_mode == "Scan Mode":
+            render_card(
+                "League Scanner",
+                """
+                <div class="card-metric-row">
+                  <div class="card-metric">
+                    <div class="cm-label">How it works</div>
+                    <div class="cm-sub">Pick a league → hit Scan. The system fetches all upcoming fixtures
+                    from the database, runs XGBoost + value verification on every match, then ranks
+                    by value edge. Use the sidebar Manual Data Tools to fetch the latest fixtures first.</div>
+                  </div>
+                </div>
+                """,
+                icon="🔍",
+                gradient="linear-gradient(135deg,#00D2FF 0%,#7B2FFF 100%)",
+            )
+
+            _SCAN_LEAGUES = {
+                "Premier League": "Premier League",
+                "La Liga": "Primera Division",
+                "Bundesliga": "Bundesliga",
+                "Serie A": "Serie A",
+                "Ligue 1": "Ligue 1",
+                "Champions League": "UEFA Champions League",
+            }
+
+            sc_col1, sc_col2, sc_col3 = st.columns([2, 1, 1])
+            with sc_col1:
+                scan_league_label = st.selectbox(
+                    "Select League to Scan",
+                    options=list(_SCAN_LEAGUES.keys()),
+                    key="scan_league_select",
+                )
+            with sc_col2:
+                scan_min_edge = st.select_slider(
+                    "Min Edge Filter",
+                    options=["All", "5%+", "10%+", "15%+"],
+                    value="All",
+                    key="scan_min_edge",
+                )
+            with sc_col3:
+                scan_positive_only = st.checkbox(
+                    "Positive edge only",
+                    value=False,
+                    key="scan_positive_only",
+                )
+
+            if st.button("Scan League", key="scan_run_btn", type="primary"):
+                _scan_league_db = _SCAN_LEAGUES[scan_league_label]
+                _conn = get_db_connection()
+                _scan_df = pd.read_sql_query(
+                    """SELECT match_id, match_date, home_team_id, home_team_name,
+                              away_team_id, away_team_name, league_name, season, status, sport_type
+                       FROM matches
+                       WHERE sport_type = 'football'
+                         AND league_name = ?
+                         AND status NOT IN (
+                             'FINISHED','COMPLETED','MATCH FINISHED','Match Finished',
+                             'finished','completed','Match Cancelled'
+                         )
+                         AND match_date >= datetime('now', '-1 day')
+                       ORDER BY match_date ASC
+                       LIMIT 20""",
+                    _conn,
+                    params=(_scan_league_db,),
+                )
+                _conn.close()
+
+                if _scan_df.empty:
+                    st.warning(
+                        f"No upcoming {scan_league_label} fixtures found in the database. "
+                        "Use the **Manual Data Tools** expander in the sidebar to fetch the latest matches first."
+                    )
+                    st.session_state.scan_results = None
+                else:
+                    _pred_agent = PredictionAgentLC()
+                    _verif_agent = VerificationAgentLC(sport_type="football")
+                    _scan_results = []
+                    _prog = st.progress(0, text="Starting scan…")
+                    for _idx, (_, _row) in enumerate(_scan_df.iterrows()):
+                        _match_dict = {
+                            "fixture": {
+                                "id": int(_row["match_id"]) if pd.notna(_row["match_id"]) else 0,
+                                "date": str(_row["match_date"]),
+                                "status": str(_row["status"]),
+                            },
+                            "league": {
+                                "name": str(_row["league_name"]),
+                                "season": int(_row["season"]) if pd.notna(_row["season"]) else 2025,
+                            },
+                            "teams": {
+                                "home": {"id": int(_row["home_team_id"]) if pd.notna(_row["home_team_id"]) else 0, "name": str(_row["home_team_name"])},
+                                "away": {"id": int(_row["away_team_id"]) if pd.notna(_row["away_team_id"]) else 0, "name": str(_row["away_team_name"])},
+                            },
+                            "goals": {"home": None, "away": None},
+                            "score": {"fulltime": {"home": None, "away": None}},
+                            "sport_type": "football",
+                        }
+                        _pred = _pred_agent.invoke(_match_dict)
+                        _verif = _verif_agent.invoke({"match": _match_dict, "prediction": _pred})
+                        _raw_edge = _verif.get("raw_value_edge")
+                        if not isinstance(_raw_edge, (int, float)):
+                            _raw_edge = 0.0
+                        _scan_results.append({
+                            "match": _match_dict,
+                            "prediction": _pred,
+                            "verification": _verif,
+                            "raw_edge": float(_raw_edge),
+                        })
+                        _prog.progress(
+                            (_idx + 1) / len(_scan_df),
+                            text=f"Scanning {_idx + 1}/{len(_scan_df)}: "
+                                 f"{_row['home_team_name']} vs {_row['away_team_name']}",
+                        )
+
+                    _scan_results.sort(key=lambda x: x["raw_edge"], reverse=True)
+                    st.session_state.scan_results = _scan_results
+                    st.session_state.scan_league_label = scan_league_label
+                    _prog.empty()
+                    st.rerun()
+
+            # ── Render cached scan results ─────────────────────────────────────
+            if st.session_state.get("scan_results"):
+                _results = st.session_state.scan_results
+                _cached_league = st.session_state.get("scan_league_label", "")
+
+                # Apply filters
+                _filtered = _results
+                if scan_positive_only:
+                    _filtered = [r for r in _filtered if r["raw_edge"] > 0]
+                if scan_min_edge == "5%+":
+                    _filtered = [r for r in _filtered if r["raw_edge"] >= 0.05]
+                elif scan_min_edge == "10%+":
+                    _filtered = [r for r in _filtered if r["raw_edge"] >= 0.10]
+                elif scan_min_edge == "15%+":
+                    _filtered = [r for r in _filtered if r["raw_edge"] >= 0.15]
+
+                _top = _filtered[:7]
+                st.markdown(f"### Top Opportunities — {_cached_league}")
+                st.caption(
+                    f"Showing {len(_top)} of {len(_filtered)} matches · sorted by value edge · "
+                    f"{len(_results)} total scanned"
+                )
+
+                if not _top:
+                    st.info("No matches meet the current filter criteria.")
+                else:
+                    for _rank, _r in enumerate(_top, 1):
+                        _m = _r["match"]
+                        _pred = _r["prediction"]
+                        _verif = _r["verification"]
+                        _raw_edge = _r["raw_edge"]
+
+                        _home = _m["teams"]["home"]["name"]
+                        _away = _m["teams"]["away"]["name"]
+                        _kickoff = str(_m["fixture"]["date"])[:16].replace("T", " ")
+                        _winner = _pred.get("predicted_winner_model", "N/A")
+                        _conf = _verif.get("confidence", "--")
+                        _rec = _verif.get("recommended_bet_side") or "None"
+
+                        if _rec.lower() == "draw":
+                            _rec_display = "Draw"
+                        elif "_win" in _rec:
+                            _rec_display = _rec.replace("_win", "")
+                        else:
+                            _rec_display = _rec
+
+                        if _raw_edge >= 0.15:
+                            _grad = "linear-gradient(135deg,#00C853 0%,#1B5E20 100%)"
+                            _edge_tag = '<span class="ctag ctag-safe">HIGH EDGE</span>'
+                        elif _raw_edge >= 0.05:
+                            _grad = "linear-gradient(135deg,#FFB300 0%,#E65100 100%)"
+                            _edge_tag = '<span class="ctag ctag-value">MED EDGE</span>'
+                        else:
+                            _grad = "linear-gradient(135deg,#455A64 0%,#263238 100%)"
+                            _edge_tag = '<span class="ctag ctag-neutral">LOW EDGE</span>'
+
+                        _edge_display = f"{_raw_edge:.2%}" if _raw_edge != 0.0 else "N/A"
+                        _edge_cls = "pos" if _raw_edge > 0 else ("neg" if _raw_edge < 0 else "mute")
+                        _h_prob = _pred.get("home_win_probability", 0.0)
+                        _d_prob = _pred.get("draw_probability", 0.0)
+                        _a_prob = _pred.get("away_win_probability", 0.0)
+
+                        render_card(
+                            f"#{_rank} · {_home} vs {_away}",
+                            icon="⚽",
+                            gradient=_grad,
+                            content_html=f"""
+                            <div class="card-metric-row">
+                              <div class="card-metric" style="flex:2;min-width:150px;">
+                                <div class="cm-label">Kickoff</div>
+                                <div class="cm-value" style="font-size:1rem;">{_kickoff}</div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Value Edge</div>
+                                <div class="cm-value xl {_edge_cls}">{_edge_display}</div>
+                                <div class="cm-sub">{_edge_tag}</div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Predicted Winner</div>
+                                <div class="cm-value" style="font-size:1.1rem;">{_winner}</div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Confidence</div>
+                                <div class="cm-value" style="font-size:1.1rem;">{_conf}</div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Bet Side</div>
+                                <div class="cm-value" style="font-size:1.1rem;">{_rec_display}</div>
+                              </div>
+                            </div>
+                            <div class="card-metric-row" style="margin-top:2px;">
+                              <div class="card-metric">
+                                <div class="cm-label">Home {_home[:18]}</div>
+                                <div style="font-size:.9rem;color:#8B8F97;">{_h_prob:.1%}</div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Draw</div>
+                                <div style="font-size:.9rem;color:#8B8F97;">{_d_prob:.1%}</div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Away {_away[:18]}</div>
+                                <div style="font-size:.9rem;color:#8B8F97;">{_a_prob:.1%}</div>
+                              </div>
+                            </div>
+                            """,
+                        )
+
+        # ── QUERY MODE ────────────────────────────────────────────────────────
+        else:
+            # ── Betting Profile card ───────────────────────────────────────────────
+            render_card(
+                "Your Betting Profile",
+                """
+                <div class="card-metric-row">
+                  <div class="card-metric" style="flex:0 0 auto;">
+                    <div class="cm-label">Risk Mode</div>
+                    <div class="cm-value" id="risk-badge" style="font-size:1.1rem;">▼ set below</div>
+                  </div>
+                  <div class="card-metric">
+                    <div class="cm-label">Low Risk</div>
+                    <div class="cm-sub">Prefer safer, higher-probability picks</div>
+                  </div>
+                  <div class="card-metric">
+                    <div class="cm-label">Medium Risk</div>
+                    <div class="cm-sub">Balance between safety and value edge</div>
+                  </div>
+                  <div class="card-metric">
+                    <div class="cm-label">High Risk</div>
+                    <div class="cm-sub">Aggressive bets with higher return potential</div>
+                  </div>
             </div>
             <div style="margin-top:10px;padding:10px 0 0;border-top:1px solid rgba(255,255,255,.07);">
               <span class="ctag ctag-info" style="margin-right:8px;">💡 Try</span>
@@ -509,446 +759,445 @@ else:
             icon="👤",
         )
 
-        col_profile_1, col_profile_2 = st.columns([1, 2])
-        with col_profile_1:
-            risk_tolerance = st.select_slider(
-                "Risk tolerance",
-                options=["Low", "Medium", "High"],
-                value=st.session_state.get("user_risk_tolerance", "Medium"),
+            col_profile_1, col_profile_2 = st.columns([1, 2])
+            with col_profile_1:
+                risk_tolerance = st.select_slider(
+                    "Risk tolerance",
+                    options=["Low", "Medium", "High"],
+                    value=st.session_state.get("user_risk_tolerance", "Medium"),
+                )
+                st.session_state.user_risk_tolerance = risk_tolerance
+
+            user_query_tab1 = st.text_input(
+                "Ask the Assistant:", placeholder="Type your request here...", key="user_query_tab1"
             )
-            st.session_state.user_risk_tolerance = risk_tolerance
 
-        user_query_tab1 = st.text_input(
-            "Ask the Assistant:", placeholder="Type your request here...", key="user_query_tab1"
-        )
-
-        if "pipeline_results" not in st.session_state:
-            st.session_state.pipeline_results = None
-        if "deep_analysis_results" not in st.session_state:
-            st.session_state.deep_analysis_results = None
-
-        if st.button("🚀 Run Initial Query") and user_query_tab1:
-            # Pass the initialized data_agent to the pipeline
-            pipeline = BettingEdgePipeline()
-
-            with st.spinner("Running initial query and data agent..."):
-                result = pipeline.run(user_query_tab1)
-                st.session_state.pipeline_results = result
+            if "pipeline_results" not in st.session_state:
+                st.session_state.pipeline_results = None
+            if "deep_analysis_results" not in st.session_state:
                 st.session_state.deep_analysis_results = None
-            st.experimental_rerun()
 
-        if st.session_state.pipeline_results:
-            initial_query_result = st.session_state.pipeline_results
+            selected_match_for_analysis = None
 
-            if initial_query_result.get("status") == "ok":
-                st.success(initial_query_result.get("message", "Initial query successful."))
+            if st.button("🚀 Run Initial Query") and user_query_tab1:
+                # Pass the initialized data_agent to the pipeline
+                pipeline = BettingEdgePipeline()
 
-                filtered_matches = initial_query_result.get("filtered_matches", [])
-                if filtered_matches:
-                    st.subheader("Select a Match for Deep Analysis:")
-                    match_options = {
-                        f"{m['teams']['home']['name']} vs {m['teams']['away']['name']} on {m['fixture']['date'][:10]} (ID: {m['fixture']['id']})": m
-                        for m in filtered_matches
-                    }
-                    selected_match_key = st.selectbox(
-                        "Choose a match:",
-                        options=list(match_options.keys()),
-                        key="match_selector"
-                    )
+                with st.spinner("Running initial query and data agent..."):
+                    result = pipeline.run(user_query_tab1)
+                    st.session_state.pipeline_results = result
+                    st.session_state.deep_analysis_results = None
+                st.experimental_rerun()
 
-                    if selected_match_key:
-                        selected_match_for_analysis = match_options[selected_match_key]
+            if st.session_state.pipeline_results:
+                initial_query_result = st.session_state.pipeline_results
 
-                        if st.button("▶️ Run Deep Analysis for Selected Match", key="run_deep_analysis_button"):
-                            # Build user context for behavior agent
-                            user_context = {
-                                "risk_tolerance": st.session_state.get("user_risk_tolerance", "Medium"),
-                                "user_id": "default_user",
-                            }
+                if initial_query_result.get("status") == "ok":
+                    st.success(initial_query_result.get("message", "Initial query successful."))
 
-                            pipeline = BettingEdgePipeline()
-                            with st.spinner("Running prediction, verification, behavior, recommendation, and ethics agents..."):
-                                deep_analysis_results = pipeline.run_deep_analysis(
-                                    selected_match_for_analysis,
-                                    user_context=user_context,
-                                )
-                                st.session_state.deep_analysis_results = deep_analysis_results
+                    filtered_matches = initial_query_result.get("filtered_matches", [])
+                    if filtered_matches:
+                        st.subheader("Select a Match for Deep Analysis:")
+                        match_options = {
+                            f"{m['teams']['home']['name']} vs {m['teams']['away']['name']} on {m['fixture']['date'][:10]} (ID: {m['fixture']['id']})": m
+                            for m in filtered_matches
+                        }
+                        selected_match_key = st.selectbox(
+                            "Choose a match:",
+                            options=list(match_options.keys()),
+                            key="match_selector"
+                        )
 
-                                # 🔹 NEW: persist this analysis to a per-session JSON log
-                                try:
-                                    session_id = st.session_state.get("session_id", "unknown_session")
-                                    log_dir = Path("session_logs")
-                                    log_dir.mkdir(exist_ok=True)
+                        if selected_match_key:
+                            selected_match_for_analysis = match_options[selected_match_key]
 
-                                    log_path = log_dir / f"session_{session_id}.json"
+                            if st.button("▶️ Run Deep Analysis for Selected Match", key="run_deep_analysis_button"):
+                                # Build user context for behavior agent
+                                user_context = {
+                                    "risk_tolerance": st.session_state.get("user_risk_tolerance", "Medium"),
+                                    "user_id": "default_user",
+                                }
 
-                                    # Load existing log (if any)
-                                    existing_entries = []
-                                    if log_path.exists():
-                                        try:
-                                            with open(log_path, "r") as f:
-                                                existing_entries = json.load(f)
-                                            if not isinstance(existing_entries, list):
-                                                existing_entries = [existing_entries]
-                                        except Exception:
-                                            existing_entries = []
+                                pipeline = BettingEdgePipeline()
+                                with st.spinner("Running prediction, verification, behavior, recommendation, and ethics agents..."):
+                                    deep_analysis_results = pipeline.run_deep_analysis(
+                                        selected_match_for_analysis,
+                                        user_context=user_context,
+                                    )
+                                    st.session_state.deep_analysis_results = deep_analysis_results
 
-                                    # Build new entry
-                                    new_entry = {
-                                        "timestamp": datetime.utcnow().isoformat(),
-                                        "user_context": user_context,
-                                        "behavior_user_profile": deep_analysis_results.get("behavior_user_profile"),
-                                        "behavior_bucket": deep_analysis_results.get("behavior_bucket"),
-                                        "analysis": deep_analysis_results,
-                                    }
+                                    # 🔹 NEW: persist this analysis to a per-session JSON log
+                                    try:
+                                        session_id = st.session_state.get("session_id", "unknown_session")
+                                        log_dir = Path("session_logs")
+                                        log_dir.mkdir(exist_ok=True)
 
-                                    existing_entries.append(new_entry)
+                                        log_path = log_dir / f"session_{session_id}.json"
 
-                                    with open(log_path, "w") as f:
-                                        json.dump(existing_entries, f, indent=2, default=str)
-                                except Exception as e:
-                                    st.warning(f"Warning: Failed to write session log: {e}")
+                                        # Load existing log (if any)
+                                        existing_entries = []
+                                        if log_path.exists():
+                                            try:
+                                                with open(log_path, "r") as f:
+                                                    existing_entries = json.load(f)
+                                                if not isinstance(existing_entries, list):
+                                                    existing_entries = [existing_entries]
+                                            except Exception:
+                                                existing_entries = []
 
-                            st.experimental_rerun()
+                                        # Build new entry
+                                        new_entry = {
+                                            "timestamp": datetime.utcnow().isoformat(),
+                                            "user_context": user_context,
+                                            "behavior_user_profile": deep_analysis_results.get("behavior_user_profile"),
+                                            "behavior_bucket": deep_analysis_results.get("behavior_bucket"),
+                                            "analysis": deep_analysis_results,
+                                        }
 
+                                        existing_entries.append(new_entry)
+
+                                        with open(log_path, "w") as f:
+                                            json.dump(existing_entries, f, indent=2, default=str)
+                                    except Exception as e:
+                                        st.warning(f"Warning: Failed to write session log: {e}")
+
+                                st.experimental_rerun()
+
+                    else:
+                        st.warning(initial_query_result.get("message", "Agent understood the query, but found no matches."))
+
+                elif initial_query_result.get("status") == "query_error":
+                    st.error(initial_query_result.get("message", "Query agent could not parse that request."))
+                elif initial_query_result.get("status") == "no_matches":
+                    st.warning(initial_query_result.get("message", "No matches found from data agent for that sport/season."))
                 else:
-                    st.warning(initial_query_result.get("message", "Agent understood the query, but found no matches."))
+                    st.error(initial_query_result.get("message", "An unexpected error occurred during the initial query phase."))
 
-            elif initial_query_result.get("status") == "query_error":
-                st.error(initial_query_result.get("message", "Query agent could not parse that request."))
-            elif initial_query_result.get("status") == "no_matches":
-                st.warning(initial_query_result.get("message", "No matches found from data agent for that sport/season."))
-            else:
-                st.error(initial_query_result.get("message", "An unexpected error occurred during the initial query phase."))
+            if 'deep_analysis_results' in st.session_state and st.session_state.deep_analysis_results:
+                deep_analysis_result = st.session_state.deep_analysis_results
 
-        if 'deep_analysis_results' in st.session_state and st.session_state.deep_analysis_results:
-            deep_analysis_result = st.session_state.deep_analysis_results
+                if deep_analysis_result.get("status") == "ok":
+                    st.success("Deep Analysis Complete!")
 
-            if deep_analysis_result.get("status") == "ok":
-                st.success("Deep Analysis Complete!")
+                    # Optional: past-match notice
+                    selected_match = deep_analysis_result.get("match") or selected_match_for_analysis or {}
+                    status = (selected_match.get("fixture", {}).get("status") or "").lower()
+                    if status in ["finished", "ft", "full-time", "match finished", "completed"]:
+                        st.markdown(
+                            '<div class="info-strip">ℹ️ This is a <strong>past match</strong>. '
+                            'The assistant will provide retrospective analysis only — no betting advice.</div>',
+                            unsafe_allow_html=True,
+                        )
 
-                # Optional: past-match notice
-                selected_match = selected_match_for_analysis
-                status = (selected_match.get("fixture", {}).get("status") or "").lower()
-                if status in ["finished", "ft", "full-time", "match finished", "completed"]:
-                    st.markdown(
-                        '<div class="info-strip">ℹ️ This is a <strong>past match</strong>. '
-                        'The assistant will provide retrospective analysis only — no betting advice.</div>',
-                        unsafe_allow_html=True,
-                    )
+                    st.markdown("---")
 
-                st.markdown("---")
+                    # ── helpers for card rendering ─────────────────────────────
+                    def _prob_cls(p):
+                        if isinstance(p, float):
+                            return "pos" if p >= 0.5 else ("warn" if p >= 0.3 else "mute")
+                        return "mute"
 
-                # ── helpers for card rendering ─────────────────────────────
-                def _prob_cls(p):
-                    if isinstance(p, float):
-                        return "pos" if p >= 0.5 else ("warn" if p >= 0.3 else "mute")
-                    return "mute"
+                    # -------- ROW 1: Prediction + Value --------
+                    col1, col2 = st.columns(2)
 
-                # -------- ROW 1: Prediction + Value --------
-                col1, col2 = st.columns(2)
+                    with col1:
+                        pred = deep_analysis_result.get('prediction', {})
+                        h_prob = pred.get('home_win_probability', 0.0)
+                        d_prob = pred.get('draw_probability', 0.0)
+                        a_prob = pred.get('away_win_probability', 0.0)
+                        winner = pred.get('predicted_winner_model', 'N/A')
+                        render_card(
+                            "Prediction Model Output", icon="📊",
+                            content_html=f"""
+                            <div class="card-metric-row">
+                              <div class="card-metric">
+                                <div class="cm-label">Predicted Winner</div>
+                                <div class="cm-value" style="font-size:1.2rem;">{winner}</div>
+                                <div class="cm-sub">Model top pick</div>
+                              </div>
+                            </div>
+                            <div class="card-metric-row">
+                              <div class="card-metric">
+                                <div class="cm-label">Home Win</div>
+                                <div class="cm-value xl {_prob_cls(h_prob)}">{h_prob:.1%}</div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Draw</div>
+                                <div class="cm-value xl {_prob_cls(d_prob)}">{d_prob:.1%}</div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Away Win</div>
+                                <div class="cm-value xl {_prob_cls(a_prob)}">{a_prob:.1%}</div>
+                              </div>
+                            </div>
+                            """,
+                        )
 
-                with col1:
-                    pred = deep_analysis_result.get('prediction', {})
-                    h_prob = pred.get('home_win_probability', 0.0)
-                    d_prob = pred.get('draw_probability', 0.0)
-                    a_prob = pred.get('away_win_probability', 0.0)
-                    winner = pred.get('predicted_winner_model', 'N/A')
-                    render_card(
-                        "Prediction Model Output", icon="📊",
-                        content_html=f"""
-                        <div class="card-metric-row">
-                          <div class="card-metric">
-                            <div class="cm-label">Predicted Winner</div>
-                            <div class="cm-value" style="font-size:1.2rem;">{winner}</div>
-                            <div class="cm-sub">Model top pick</div>
-                          </div>
-                        </div>
-                        <div class="card-metric-row">
-                          <div class="card-metric">
-                            <div class="cm-label">Home Win</div>
-                            <div class="cm-value xl {_prob_cls(h_prob)}">{h_prob:.1%}</div>
-                          </div>
-                          <div class="card-metric">
-                            <div class="cm-label">Draw</div>
-                            <div class="cm-value xl {_prob_cls(d_prob)}">{d_prob:.1%}</div>
-                          </div>
-                          <div class="card-metric">
-                            <div class="cm-label">Away Win</div>
-                            <div class="cm-value xl {_prob_cls(a_prob)}">{a_prob:.1%}</div>
-                          </div>
-                        </div>
-                        """,
-                    )
-
-                with col2:
-                    verify = deep_analysis_result.get('verification', {})
-                    raw_value_edge = verify.get('raw_value_edge')
-                    raw_value_edge_display = (
-                        f"{raw_value_edge:.2%}"
-                        if isinstance(raw_value_edge, (int, float))
-                        else "N/A"
-                    )
-                    edge_cls = (
-                        "pos" if isinstance(raw_value_edge, float) and raw_value_edge > 0
-                        else ("neg" if isinstance(raw_value_edge, float) and raw_value_edge < 0
-                              else "mute")
-                    )
-                    # Get risk-aware recommendation (not just value-based)
-                    recommendation = deep_analysis_result.get('recommendation', {})
-                    risk_aware_bet_side = recommendation.get('recommended_bet_side', 'None')
-                    recommendation_strategy = recommendation.get('recommendation_strategy', 'SAFE')
-
-                    # Format display (handle Draw, Home win, Away win)
-                    if risk_aware_bet_side and risk_aware_bet_side.lower() == "draw":
-                        bet_side_display = "🔄 Draw"
-                    elif risk_aware_bet_side and "_win" in risk_aware_bet_side:
-                        team_name = risk_aware_bet_side.replace("_win", "")
-                        bet_side_display = f"✓ {team_name}"
-                    else:
-                        bet_side_display = risk_aware_bet_side
-
-                    # Add strategy indicator
-                    if recommendation_strategy == "BLOCKED":
-                        strategy_emoji = "⛔"
-                        bet_side_display = "NONE"
-                        strat_tag_cls = "ctag-blocked"
-                    elif recommendation_strategy == "VALUE":
-                        strategy_emoji = "💰"
-                        strat_tag_cls = "ctag-value"
-                    else:
-                        strategy_emoji = "🛡️"
-                        strat_tag_cls = "ctag-safe"
-
-                    conf = verify.get('confidence', 'Low')
-                    conf_cls = "ctag-pass" if conf == "High" else ("ctag-value" if conf == "Medium" else "ctag-neutral")
-                    edge_rating = verify.get('value_edge_rating', 'N/A')
-                    rating_cls = "ctag-pass" if edge_rating == "High" else ("ctag-value" if edge_rating == "Medium" else "ctag-neutral")
-
-                    render_card(
-                        "Value Verification", icon="🔍",
-                        content_html=f"""
-                        <div class="card-metric-row">
-                          <div class="card-metric">
-                            <div class="cm-label">Raw Value Edge</div>
-                            <div class="cm-value xl {edge_cls}">{raw_value_edge_display}</div>
-                            <div class="cm-sub"><span class="ctag {rating_cls}">Rating: {edge_rating}</span></div>
-                          </div>
-                          <div class="card-metric">
-                            <div class="cm-label">Confidence</div>
-                            <div class="cm-value" style="font-size:1.2rem;">{conf}</div>
-                            <div class="cm-sub"><span class="ctag {conf_cls}">{conf}</span></div>
-                          </div>
-                        </div>
-                        <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07);">
-                          <div class="cm-label">Risk-Aware Recommendation</div>
-                          <div style="margin-top:6px;display:flex;align-items:center;gap:8px;">
-                            <span style="font-size:1.3rem;font-weight:700;color:#fff;">{strategy_emoji} {bet_side_display}</span>
-                            <span class="ctag {strat_tag_cls}">{recommendation_strategy}</span>
-                          </div>
-                        </div>
-                        """,
-                    )
-
-                # -------- ROW 2: Behavior + Ethics --------
-                st.divider()
-                beh_col, eth_col = st.columns([2, 1])
-
-                # ---- Behavior column ----
-                with beh_col:
-                    action_output = deep_analysis_result.get('action', {})
-
-                    if isinstance(action_output, str):
-                        action_tag = action_output
-                        bucket_name = action_output
-                        bucket_description = ""
-                        risk_factor_display = "N/A"
-                        risk_factor = None
-                        user_profile_display = None
-                    else:
-                        action_tag = action_output.get("action", "SAFE_PICK")
-                        bucket_name = action_output.get("bucket_label") or action_tag
-                        bucket_description = action_output.get("bucket_description", "")
-                        risk_factor = action_output.get("risk_factor", None)
-                        risk_factor_display = (
-                            f"{risk_factor:.2f}"
-                            if isinstance(risk_factor, (int, float))
+                    with col2:
+                        verify = deep_analysis_result.get('verification', {})
+                        raw_value_edge = verify.get('raw_value_edge')
+                        raw_value_edge_display = (
+                            f"{raw_value_edge:.2%}"
+                            if isinstance(raw_value_edge, (int, float))
                             else "N/A"
                         )
-                        user_profile_display = action_output.get("user_profile")
-
-                    # Budget-based suggested stake
-                    bet_budget = st.session_state.get("bet_budget", 0)
-                    stake_fraction_map = {
-                        "SAFE_PICK": 0.5,
-                        "VALUE_BET": 0.35,
-                        "HIGH_RISK": 0.15,
-                        "EXPLANATION_ONLY": 0.0,
-                    }
-                    stake_fraction = stake_fraction_map.get(action_tag, 0.0)
-                    suggested_stake = round(bet_budget * stake_fraction, 2)
-
-                    recommendation = deep_analysis_result.get("recommendation", {})
-                    recommended_side = recommendation.get("recommended_bet_side", "None")
-                    recommendation_strategy = recommendation.get("recommendation_strategy", "SAFE")
-                    safest_bet = recommendation.get("safest_bet_side", "N/A")
-                    safest_prob = recommendation.get("safest_probability", 0.0)
-
-                    if recommended_side and recommended_side.lower() == "draw":
-                        bet_display = "🔄 Draw"
-                    elif recommended_side and "_win" in recommended_side:
-                        team_name = recommended_side.replace("_win", "")
-                        bet_display = f"✓ {team_name}"
-                    else:
-                        bet_display = recommended_side
-
-                    strategy_emoji = "🛡️" if recommendation_strategy == "SAFE" else "💰"
-                    strategy_label = "Safer bet" if recommendation_strategy == "SAFE" else "Value bet"
-
-                    bkt_tag_cls = {
-                        "SAFE_PICK": "ctag-safe",
-                        "VALUE_BET": "ctag-value",
-                        "HIGH_RISK": "ctag-high",
-                        "EXPLANATION_ONLY": "ctag-neutral",
-                    }.get(action_tag, "ctag-neutral")
-
-                    rf_cls = "mute"
-                    if isinstance(risk_factor, float):
-                        rf_cls = "pos" if risk_factor < 0.4 else ("warn" if risk_factor < 0.7 else "neg")
-
-                    if bet_budget > 0 and suggested_stake > 0:
-                        stake_html = (
-                            f'<div style="margin-top:8px;">'
-                            f'<span class="cm-label">Suggested Stake</span><br>'
-                            f'<span style="font-size:1.4rem;font-weight:700;color:#fff;">${suggested_stake:.2f}</span>'
-                            f' <span style="color:#8B8F97;font-size:.82rem;">on <strong style="color:#E8EAED;">{bet_display}</strong>'
-                            f' {strategy_emoji} {strategy_label}</span>'
-                            + (f'<div class="cm-sub" style="margin-top:4px;">📊 Safest: {safest_bet} ({safest_prob:.1%})</div>'
-                               if safest_bet != "N/A" else "")
-                            + f'<div class="cm-sub">from ${bet_budget:.2f} per-pick budget</div></div>'
+                        edge_cls = (
+                            "pos" if isinstance(raw_value_edge, float) and raw_value_edge > 0
+                            else ("neg" if isinstance(raw_value_edge, float) and raw_value_edge < 0
+                                  else "mute")
                         )
-                    elif bet_budget > 0:
-                        stake_html = '<div class="info-strip" style="margin-top:8px;">No stake — this bucket recommends <strong>explanation only</strong>.</div>'
-                    else:
-                        stake_html = '<div class="info-strip" style="margin-top:8px;">Set a budget in the sidebar to see stake suggestions.</div>'
+                        # Get risk-aware recommendation (not just value-based)
+                        recommendation = deep_analysis_result.get('recommendation', {})
+                        risk_aware_bet_side = recommendation.get('recommended_bet_side', 'None')
+                        recommendation_strategy = recommendation.get('recommendation_strategy', 'SAFE')
 
-                    render_card(
-                        "Behavior Action", icon="🧠",
-                        content_html=f"""
-                        <div class="card-metric-row">
-                          <div class="card-metric">
-                            <div class="cm-label">Behavior Bucket</div>
-                            <div class="cm-value" style="font-size:1.2rem;">{bucket_name}</div>
-                            <div class="cm-sub"><span class="ctag {bkt_tag_cls}">{action_tag}</span></div>
-                          </div>
-                          <div class="card-metric">
-                            <div class="cm-label">Risk Factor</div>
-                            <div class="cm-value xl {rf_cls}">{risk_factor_display}</div>
-                          </div>
-                        </div>
-                        {('<div class="cm-sub" style="margin-bottom:8px;color:#8B8F97;">' + bucket_description + '</div>') if bucket_description else ''}
-                        {stake_html}
-                        """,
-                    )
+                        # Format display (handle Draw, Home win, Away win)
+                        if risk_aware_bet_side and risk_aware_bet_side.lower() == "draw":
+                            bet_side_display = "🔄 Draw"
+                        elif risk_aware_bet_side and "_win" in risk_aware_bet_side:
+                            team_name = risk_aware_bet_side.replace("_win", "")
+                            bet_side_display = f"✓ {team_name}"
+                        else:
+                            bet_side_display = risk_aware_bet_side
 
-                    if user_profile_display:
-                        with st.expander("View Behavior User Profile (DQN Inputs)"):
-                            st.json(user_profile_display)
+                        # Add strategy indicator
+                        if recommendation_strategy == "BLOCKED":
+                            strategy_emoji = "⛔"
+                            bet_side_display = "NONE"
+                            strat_tag_cls = "ctag-blocked"
+                        elif recommendation_strategy == "VALUE":
+                            strategy_emoji = "💰"
+                            strat_tag_cls = "ctag-value"
+                        else:
+                            strategy_emoji = "🛡️"
+                            strat_tag_cls = "ctag-safe"
 
-                # ---- Ethics column ----
-                with eth_col:
-                    ethics_output = deep_analysis_result.get("ethics", {})
-                    ethics_status = ethics_output.get("status", "pending")
-                    viol_prob = ethics_output.get("violation_prob")
-                    safe_prob = ethics_output.get("safe_prob")
-                    backend = ethics_output.get("backend", "unknown")
+                        conf = verify.get('confidence', 'Low')
+                        conf_cls = "ctag-pass" if conf == "High" else ("ctag-value" if conf == "Medium" else "ctag-neutral")
+                        edge_rating = verify.get('value_edge_rating', 'N/A')
+                        rating_cls = "ctag-pass" if edge_rating == "High" else ("ctag-value" if edge_rating == "Medium" else "ctag-neutral")
 
-                    eth_tag = "ctag-pass" if ethics_status == "pass" else ("ctag-fail" if ethics_status == "fail" else "ctag-neutral")
-                    eth_icon = "✅" if ethics_status == "pass" else ("⛔" if ethics_status == "fail" else "⏳")
-
-                    scores_html = ""
-                    if isinstance(viol_prob, (int, float)) and isinstance(safe_prob, (int, float)):
-                        scores_html = f"""
-                        <div class="card-metric-row" style="margin-top:10px;">
-                          <div class="card-metric">
-                            <div class="cm-label">Violation Prob</div>
-                            <div class="cm-value {'neg' if viol_prob > 0.4 else 'pos'}" style="font-size:1.3rem;">{viol_prob:.1%}</div>
-                          </div>
-                          <div class="card-metric">
-                            <div class="cm-label">Safe Prob</div>
-                            <div class="cm-value {'pos' if safe_prob > 0.6 else 'warn'}" style="font-size:1.3rem;">{safe_prob:.1%}</div>
-                          </div>
-                        </div>
-                        <div class="cm-sub">Backend: <code style="color:#8B8F97;">{backend}</code></div>
-                        """
-
-                    render_card(
-                        "Ethics & Safety", icon="⚖️",
-                        gradient="linear-gradient(135deg,#00D2FF 0%,#0066CC 100%)",
-                        content_html=f"""
-                        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
-                          <span style="font-size:1.6rem;">{eth_icon}</span>
-                          <div>
-                            <div class="cm-label">Status</div>
-                            <span class="ctag {eth_tag}" style="font-size:.85rem;">{ethics_status.upper()}</span>
-                          </div>
-                        </div>
-                        {scores_html}
-                        """,
-                    )
-
-
-
-                st.divider()
-                recommendation_output = deep_analysis_result.get('recommendation', {})
-                rec_text = recommendation_output.get("recommendation_text", "No recommendation text available.")
-                render_card(
-                    "Final Recommendation — LLM Synthesis", icon="📝",
-                    gradient="linear-gradient(135deg,#7B2FFF 0%,#FF0080 100%)",
-                    content_html=f'<div class="rec-text">{rec_text}</div>',
-                )
-
-                with st.expander("Debugging & Raw Agent Output"):
-                    st.subheader("Full Prediction Output")
-                    st.json(deep_analysis_result.get("prediction", {}))
-
-                    st.subheader("Full Verification Output")
-                    st.json(deep_analysis_result.get("verification", {}))
-
-                    st.subheader("Full Behavior Output")
-                    st.json(deep_analysis_result.get("action", {}))
-
-                    st.subheader("Behavior User Profile (top-level)")
-                    st.json(
-                        deep_analysis_result.get(
-                            "behavior_user_profile",
-                            deep_analysis_result.get("action", {}).get("user_profile", {}),
+                        render_card(
+                            "Value Verification", icon="🔍",
+                            content_html=f"""
+                            <div class="card-metric-row">
+                              <div class="card-metric">
+                                <div class="cm-label">Raw Value Edge</div>
+                                <div class="cm-value xl {edge_cls}">{raw_value_edge_display}</div>
+                                <div class="cm-sub"><span class="ctag {rating_cls}">Rating: {edge_rating}</span></div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Confidence</div>
+                                <div class="cm-value" style="font-size:1.2rem;">{conf}</div>
+                                <div class="cm-sub"><span class="ctag {conf_cls}">{conf}</span></div>
+                              </div>
+                            </div>
+                            <div style="margin-top:10px;padding-top:10px;border-top:1px solid rgba(255,255,255,.07);">
+                              <div class="cm-label">Risk-Aware Recommendation</div>
+                              <div style="margin-top:6px;display:flex;align-items:center;gap:8px;">
+                                <span style="font-size:1.3rem;font-weight:700;color:#fff;">{strategy_emoji} {bet_side_display}</span>
+                                <span class="ctag {strat_tag_cls}">{recommendation_strategy}</span>
+                              </div>
+                            </div>
+                            """,
                         )
+
+                    # -------- ROW 2: Behavior + Ethics --------
+                    st.divider()
+                    beh_col, eth_col = st.columns([2, 1])
+
+                    # ---- Behavior column ----
+                    with beh_col:
+                        action_output = deep_analysis_result.get('action', {})
+
+                        if isinstance(action_output, str):
+                            action_tag = action_output
+                            bucket_name = action_output
+                            bucket_description = ""
+                            risk_factor_display = "N/A"
+                            risk_factor = None
+                            user_profile_display = None
+                        else:
+                            action_tag = action_output.get("action", "SAFE_PICK")
+                            bucket_name = action_output.get("bucket_label") or action_tag
+                            bucket_description = action_output.get("bucket_description", "")
+                            risk_factor = action_output.get("risk_factor", None)
+                            risk_factor_display = (
+                                f"{risk_factor:.2f}"
+                                if isinstance(risk_factor, (int, float))
+                                else "N/A"
+                            )
+                            user_profile_display = action_output.get("user_profile")
+
+                        # Budget-based suggested stake
+                        bet_budget = st.session_state.get("bet_budget", 0)
+                        stake_fraction_map = {
+                            "SAFE_PICK": 0.5,
+                            "VALUE_BET": 0.35,
+                            "HIGH_RISK": 0.15,
+                            "EXPLANATION_ONLY": 0.0,
+                        }
+                        stake_fraction = stake_fraction_map.get(action_tag, 0.0)
+                        suggested_stake = round(bet_budget * stake_fraction, 2)
+
+                        recommendation = deep_analysis_result.get("recommendation", {})
+                        recommended_side = recommendation.get("recommended_bet_side", "None")
+                        recommendation_strategy = recommendation.get("recommendation_strategy", "SAFE")
+                        safest_bet = recommendation.get("safest_bet_side", "N/A")
+                        safest_prob = recommendation.get("safest_probability", 0.0)
+
+                        if recommended_side and recommended_side.lower() == "draw":
+                            bet_display = "🔄 Draw"
+                        elif recommended_side and "_win" in recommended_side:
+                            team_name = recommended_side.replace("_win", "")
+                            bet_display = f"✓ {team_name}"
+                        else:
+                            bet_display = recommended_side
+
+                        strategy_emoji = "🛡️" if recommendation_strategy == "SAFE" else "💰"
+                        strategy_label = "Safer bet" if recommendation_strategy == "SAFE" else "Value bet"
+
+                        bkt_tag_cls = {
+                            "SAFE_PICK": "ctag-safe",
+                            "VALUE_BET": "ctag-value",
+                            "HIGH_RISK": "ctag-high",
+                            "EXPLANATION_ONLY": "ctag-neutral",
+                        }.get(action_tag, "ctag-neutral")
+
+                        rf_cls = "mute"
+                        if isinstance(risk_factor, float):
+                            rf_cls = "pos" if risk_factor < 0.4 else ("warn" if risk_factor < 0.7 else "neg")
+
+                        if bet_budget > 0 and suggested_stake > 0:
+                            stake_html = (
+                                f'<div style="margin-top:8px;">'
+                                f'<span class="cm-label">Suggested Stake</span><br>'
+                                f'<span style="font-size:1.4rem;font-weight:700;color:#fff;">${suggested_stake:.2f}</span>'
+                                f' <span style="color:#8B8F97;font-size:.82rem;">on <strong style="color:#E8EAED;">{bet_display}</strong>'
+                                f' {strategy_emoji} {strategy_label}</span>'
+                                + (f'<div class="cm-sub" style="margin-top:4px;">📊 Safest: {safest_bet} ({safest_prob:.1%})</div>'
+                                   if safest_bet != "N/A" else "")
+                                + f'<div class="cm-sub">from ${bet_budget:.2f} per-pick budget</div></div>'
+                            )
+                        elif bet_budget > 0:
+                            stake_html = '<div class="info-strip" style="margin-top:8px;">No stake — this bucket recommends <strong>explanation only</strong>.</div>'
+                        else:
+                            stake_html = '<div class="info-strip" style="margin-top:8px;">Set a budget in the sidebar to see stake suggestions.</div>'
+
+                        render_card(
+                            "Behavior Action", icon="🧠",
+                            content_html=f"""
+                            <div class="card-metric-row">
+                              <div class="card-metric">
+                                <div class="cm-label">Behavior Bucket</div>
+                                <div class="cm-value" style="font-size:1.2rem;">{bucket_name}</div>
+                                <div class="cm-sub"><span class="ctag {bkt_tag_cls}">{action_tag}</span></div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Risk Factor</div>
+                                <div class="cm-value xl {rf_cls}">{risk_factor_display}</div>
+                              </div>
+                            </div>
+                            {('<div class="cm-sub" style="margin-bottom:8px;color:#8B8F97;">' + bucket_description + '</div>') if bucket_description else ''}
+                            {stake_html}
+                            """,
+                        )
+
+                        if user_profile_display:
+                            with st.expander("View Behavior User Profile (DQN Inputs)"):
+                                st.json(user_profile_display)
+
+                    # ---- Ethics column ----
+                    with eth_col:
+                        ethics_output = deep_analysis_result.get("ethics", {})
+                        ethics_status = ethics_output.get("status", "pending")
+                        viol_prob = ethics_output.get("violation_prob")
+                        safe_prob = ethics_output.get("safe_prob")
+                        backend = ethics_output.get("backend", "unknown")
+
+                        eth_tag = "ctag-pass" if ethics_status == "pass" else ("ctag-fail" if ethics_status == "fail" else "ctag-neutral")
+                        eth_icon = "✅" if ethics_status == "pass" else ("⛔" if ethics_status == "fail" else "⏳")
+
+                        scores_html = ""
+                        if isinstance(viol_prob, (int, float)) and isinstance(safe_prob, (int, float)):
+                            scores_html = f"""
+                            <div class="card-metric-row" style="margin-top:10px;">
+                              <div class="card-metric">
+                                <div class="cm-label">Violation Prob</div>
+                                <div class="cm-value {'neg' if viol_prob > 0.4 else 'pos'}" style="font-size:1.3rem;">{viol_prob:.1%}</div>
+                              </div>
+                              <div class="card-metric">
+                                <div class="cm-label">Safe Prob</div>
+                                <div class="cm-value {'pos' if safe_prob > 0.6 else 'warn'}" style="font-size:1.3rem;">{safe_prob:.1%}</div>
+                              </div>
+                            </div>
+                            <div class="cm-sub">Backend: <code style="color:#8B8F97;">{backend}</code></div>
+                            """
+
+                        render_card(
+                            "Ethics & Safety", icon="⚖️",
+                            gradient="linear-gradient(135deg,#00D2FF 0%,#0066CC 100%)",
+                            content_html=f"""
+                            <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+                              <span style="font-size:1.6rem;">{eth_icon}</span>
+                              <div>
+                                <div class="cm-label">Status</div>
+                                <span class="ctag {eth_tag}" style="font-size:.85rem;">{ethics_status.upper()}</span>
+                              </div>
+                            </div>
+                            {scores_html}
+                            """,
+                        )
+
+                    st.divider()
+                    recommendation_output = deep_analysis_result.get('recommendation', {})
+                    rec_text = recommendation_output.get("recommendation_text", "No recommendation text available.")
+                    render_card(
+                        "Final Recommendation — LLM Synthesis", icon="📝",
+                        gradient="linear-gradient(135deg,#7B2FFF 0%,#FF0080 100%)",
+                        content_html=f'<div class="rec-text">{rec_text}</div>',
                     )
 
-                    st.subheader("Raw selected_match passed to agents")
-                    st.json(deep_analysis_result.get("match", {}))
+                    with st.expander("Debugging & Raw Agent Output"):
+                        st.subheader("Full Prediction Output")
+                        st.json(deep_analysis_result.get("prediction", {}))
 
-                    st.subheader("Full Recommendation Output")
-                    st.json(deep_analysis_result.get("recommendation", {}))
+                        st.subheader("Full Verification Output")
+                        st.json(deep_analysis_result.get("verification", {}))
 
-                    st.subheader("Full Ethics Output")
-                    st.json(deep_analysis_result.get("ethics", {}))
+                        st.subheader("Full Behavior Output")
+                        st.json(deep_analysis_result.get("action", {}))
 
-                    st.subheader("Raw Value Edges (All Outcomes)")
-                    st.json(deep_analysis_result.get("verification", {}).get("all_value_edges", {}))
+                        st.subheader("Behavior User Profile (top-level)")
+                        st.json(
+                            deep_analysis_result.get(
+                                "behavior_user_profile",
+                                deep_analysis_result.get("action", {}).get("user_profile", {}),
+                            )
+                        )
 
+                        st.subheader("Raw selected_match passed to agents")
+                        st.json(deep_analysis_result.get("match", {}))
 
-            else:
-                st.error(deep_analysis_result.get("message", "Deep analysis failed for an unknown reason."))
+                        st.subheader("Full Recommendation Output")
+                        st.json(deep_analysis_result.get("recommendation", {}))
 
-        if st.session_state.pipeline_results and st.session_state.pipeline_results.get("status") != "ok" and not st.session_state.deep_analysis_results:
-            if st.session_state.pipeline_results.get("status") == "query_error":
-                st.error(st.session_state.pipeline_results.get("message", "Query agent could not parse that request."))
-            elif st.session_state.pipeline_results.get("status") == "no_matches":
-                st.warning(st.session_state.pipeline_results.get("message", "Agent understood the query, but found no matches involving that team or criteria."))
-            else:
-                st.error(st.session_state.pipeline_results.get("message", "An unexpected error occurred during the initial query phase."))
+                        st.subheader("Full Ethics Output")
+                        st.json(deep_analysis_result.get("ethics", {}))
+
+                        st.subheader("Raw Value Edges (All Outcomes)")
+                        st.json(deep_analysis_result.get("verification", {}).get("all_value_edges", {}))
+
+                else:
+                    st.error(deep_analysis_result.get("message", "Deep analysis failed for an unknown reason."))
+
+            if st.session_state.pipeline_results and st.session_state.pipeline_results.get("status") != "ok" and not st.session_state.deep_analysis_results:
+                if st.session_state.pipeline_results.get("status") == "query_error":
+                    st.error(st.session_state.pipeline_results.get("message", "Query agent could not parse that request."))
+                elif st.session_state.pipeline_results.get("status") == "no_matches":
+                    st.warning(st.session_state.pipeline_results.get("message", "Agent understood the query, but found no matches involving that team or criteria."))
+                else:
+                    st.error(st.session_state.pipeline_results.get("message", "An unexpected error occurred during the initial query phase."))
 
 
     # Dashboard tab (No changes needed, uses existing data_agent and DB functions)
